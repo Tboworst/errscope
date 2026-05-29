@@ -38,14 +38,21 @@ def store_event(event):
     norm_msg = normalize_message(event["message"])
     fn_chain = "->".join(frame["function"] for frame in event["stack_trace"])
 
-    #updates if the ven is already in groups adds 1 and changes latest time
-    cur.execute("INSERT INTO events VALUES (?, ?, ?, ?)", (fp, event["timestamp"], event["exception_type"], event["message"]))
-    cur.execute("""
+    # open a new connection per call so this is safe to call from any thread
+    # SQLite connections cannot be shared across threads
+    local_conn = sqlite3.connect('errscope.db')
+    local_cur = local_conn.cursor()
+
+    #updates if the event is already in groups adds 1 and changes latest time
+    local_cur.execute("INSERT INTO events VALUES (?, ?, ?, ?)", (fp, event["timestamp"], event["exception_type"], event["message"]))
+    local_cur.execute("""
         INSERT INTO groups VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(fingerprint) DO UPDATE SET
             count = count + 1,
             last_seen = ?
-    """, (fp, event["exception_type"], norm_msg, fn_chain, 1, event["timestamp"], event["timestamp"], event["timestamp"])) 
-    #makes just the changes are commited and not lost
-    conn.commit()
+    """, (fp, event["exception_type"], norm_msg, fn_chain, 1, event["timestamp"], event["timestamp"], event["timestamp"]))
+
+    #makes sure the changes are committed and not lost
+    local_conn.commit()
+    local_conn.close()
 

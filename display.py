@@ -57,7 +57,7 @@ def show_groups():
             format_timestamp(last_seen),
         )
 
-    console.print(table)
+    return table
 
 
 if __name__ == "__main__":

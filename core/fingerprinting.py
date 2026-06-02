@@ -1,5 +1,5 @@
 import hashlib
-from normalize import normalize_message
+from .normalize import normalize_message
 
 
 def fingerprint(event):

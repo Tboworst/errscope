@@ -1,12 +1,21 @@
+import os
 from flask import Flask, request, jsonify
-from storage import store_event
+from .storage import store_event
 
 
 app = Flask(__name__)
 
+# if ERRSCOPE_API_KEY is set, all ingest requests must include it
+# if not set, the server accepts all requests (local dev mode)
+API_KEY = os.environ.get("ERRSCOPE_API_KEY")
+
 
 @app.route('/ingest', methods=['POST'])
 def handle_ingest():
+    # check API key when one is configured
+    if API_KEY and request.headers.get("X-Api-Key") != API_KEY:
+        return jsonify({"error": "unauthorized"}), 401
+
     data = request.get_json()
 
     # reject requests with no JSON body

@@ -25,55 +25,126 @@ Think lightweight Sentry, built for the terminal, owned by you.
  q quit  r refresh  enter details
 ```
 
-Press **enter** on any row to see the full stack trace, call chain, and timestamps.
+Press **enter** on any row to drill into the full stack trace, call chain, and timestamps.
 
 ---
 
-## Features
-
-- **Smart grouping** — errors are grouped by what caused them, not raw message text. `NoneType has no attribute 'email'` and `NoneType has no attribute 'username'` land in the same group because they're the same bug.
-- **Fingerprinting** — exception type + normalized message + function call chain. Line numbers are ignored (they change when you reformat code). Function names are the stable identity of where something broke.
-- **Normalization** — runtime noise stripped before hashing: file paths, UUIDs, emails, numbers all replaced with placeholders so the same bug always produces the same fingerprint.
-- **HTTP ingest** — any service can send errors with a single POST request. Language agnostic.
-- **Live TUI dashboard** — real-time updating terminal UI built with Textual. Sparkline showing event rate over the last 20 minutes.
-- **Slack alerts** — automatic notification when an error group crosses a threshold.
-- **30-day retention** — raw events older than 30 days are pruned automatically. Error groups and counts are kept forever.
-- **Self-hosted** — your errors stay on your infrastructure.
-
----
-
-## Quick start
+## Quick start — Docker
 
 ```bash
 git clone https://github.com/Tboworst/errscope.git
 cd errscope
-pip install flask watchdog textual requests
+cp .env.example .env   # add your API key and Slack webhook
+docker-compose up
 ```
 
-Set your Slack webhook (optional):
+Server is running at `http://localhost:7000`.
+
+Open the dashboard in a separate terminal:
 
 ```bash
+pip install textual
+python3 start_dashboard.py
+```
+
+---
+
+## Quick start — without Docker
+
+```bash
+git clone https://github.com/Tboworst/errscope.git
+cd errscope
+pip install -r requirements.txt
 cp .env.example .env
-# edit .env and add your SLACK_WEBHOOK_URL
+python3 start_server.py      # terminal 1
+python3 start_dashboard.py   # terminal 2
 ```
 
-Start the ingest server:
+---
+
+## Python SDK
+
+Install in your app:
 
 ```bash
-python3 server.py
+pip install requests
 ```
 
-Open the dashboard in a new terminal:
+Copy `sdk/python/errscope/` into your project, then add two lines to your entry point:
 
-```bash
-python3 dashboard.py
+```python
+import errscope
+
+errscope.init(
+    endpoint="http://your-errscope-server:7000/ingest",
+    service="my-app",
+    environment="production",
+    api_key="your-secret-key-here"   # matches ERRSCOPE_API_KEY in .env
+)
 ```
 
-Send an error from any service:
+Every unhandled exception is now automatically captured. For handled exceptions:
+
+```python
+try:
+    risky_operation()
+except Exception as e:
+    errscope.capture(e)
+```
+
+---
+
+## Configuration
+
+| Variable | Description |
+|---|---|
+| `ERRSCOPE_API_KEY` | Secret key required on all ingest requests. If not set, server accepts all requests (local dev mode). |
+| `SLACK_WEBHOOK_URL` | Slack incoming webhook URL. Alerts fire when an error group exceeds 50 occurrences. |
+
+---
+
+## How errors are grouped
+
+```
+raw errors:  "NoneType has no attribute 'email'"
+             "NoneType has no attribute 'username'"
+
+fingerprint: AttributeError
+             NoneType has no attribute <attr>        ← normalized
+             handle_request → get_current_user → find_user_by_token
+
+result:      same group. one bug. one row.
+```
+
+Fingerprint = SHA-256 hash of exception type + normalized message + function call chain.
+Line numbers are ignored — they change on every reformat. Function names are stable.
+
+---
+
+## Project structure
+
+```
+errscope/
+├── core/               ← ingest server, storage, fingerprinting (Python → Go)
+├── dashboard/          ← live TUI dashboard (Textual)
+├── sdk/
+│   └── python/         ← Python SDK
+├── start_server.py     ← python3 start_server.py
+├── start_dashboard.py  ← python3 start_dashboard.py
+├── docker-compose.yml
+└── requirements.txt
+```
+
+---
+
+## Sending errors from any language
+
+Any service can send errors directly over HTTP — no SDK required:
 
 ```bash
 curl -X POST http://localhost:7000/ingest \
   -H "Content-Type: application/json" \
+  -H "X-Api-Key: your-secret-key-here" \
   -d '{
     "timestamp": "2024-01-15T10:23:45Z",
     "exception_type": "AttributeError",
@@ -85,75 +156,18 @@ curl -X POST http://localhost:7000/ingest \
   }'
 ```
 
-Watch it appear in the dashboard instantly.
-
----
-
-## How errors are grouped
-
-```
-raw error:   "NoneType has no attribute 'email'"
-             "NoneType has no attribute 'username'"
-
-fingerprint: AttributeError
-             NoneType has no attribute <attr>        ← normalized
-             handle_request → get_current_user → find_user_by_token
-
-result:      same group. one bug. one row.
-```
-
-The fingerprint is a SHA-256 hash of exception type + normalized message + function call chain.
-
----
-
-## Sending errors from your app
-
-Any language, any framework. Just POST JSON:
-
-```python
-# Python
-import requests, traceback, datetime
-
-def capture(exc):
-    requests.post("http://localhost:7000/ingest", json={
-        "timestamp": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "exception_type": type(exc).__name__,
-        "message": str(exc),
-        "stack_trace": [
-            {"function": frame.name, "file": frame.filename, "line": frame.lineno}
-            for frame in traceback.extract_tb(exc.__traceback__)
-        ]
-    })
-```
-
-```javascript
-// Node.js
-function capture(err) {
-  fetch("http://localhost:7000/ingest", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      timestamp: new Date().toISOString().replace(".000Z", "Z"),
-      exception_type: err.constructor.name,
-      message: err.message,
-      stack_trace: [{ function: "main", file: "app.js", line: 0 }]
-    })
-  })
-}
-```
-
 ---
 
 ## Roadmap
 
-- [ ] Deploy markers — correlate errors with deploys ("started 3 min after deploy #12")
-- [ ] Environment tagging — separate prod vs staging noise
+- [ ] Deploy markers — correlate errors with deploys
+- [ ] Environment tagging — separate prod vs staging
 - [ ] Spike detection — alert on rate of increase, not just total count
 - [ ] Regression alerts — error quiet for 7 days that suddenly fires again
-- [ ] Interactive resolution — mark groups as resolved or ignored from the TUI
-- [ ] GitHub integration — open an issue from any error group with one keypress
-- [ ] Go rewrite of the core — for high-throughput ingest with Redis hot path
-- [ ] Multi-source dashboard — see all services in one view with source labels
+- [ ] Resolve / ignore groups from the TUI
+- [ ] GitHub issue creation from any error group
+- [ ] Node.js SDK
+- [ ] Go rewrite of the core server with Redis hot path
 
 ---
 
@@ -161,11 +175,11 @@ function capture(err) {
 
 | Layer | Tech |
 |---|---|
-| Ingest | Python + Flask |
+| Ingest server | Python + Flask |
 | Storage | SQLite |
 | Dashboard | Python + Textual |
 | Alerts | Slack webhooks |
-| File watching | watchdog |
+| Containerisation | Docker |
 
 ---
 
@@ -175,7 +189,7 @@ Sentry is excellent. errscope is for when you want:
 - No data leaving your network
 - No per-event pricing at scale
 - A terminal-native workflow
-- Something you actually understand and can modify
+- Something you can read, modify, and own completely
 
 ---
 

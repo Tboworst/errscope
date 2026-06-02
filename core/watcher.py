@@ -2,7 +2,7 @@ import json
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-from storage import store_event
+from .storage import store_event
 
 
 class LogHandler(FileSystemEventHandler):

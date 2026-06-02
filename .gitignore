@@ -11,3 +11,4 @@ __pycache__/
 
 # test artifacts
 test_event.json
+test.py

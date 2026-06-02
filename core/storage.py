@@ -1,7 +1,7 @@
 import sqlite3
-from fingerprinting import fingerprint
-from normalize import normalize_message
-from alerts import check_and_alert
+from .fingerprinting import fingerprint
+from .normalize import normalize_message
+from .alerts import check_and_alert
 
 #connecting the db, must create one if we dont have it yet,creations happen in connect
 conn = sqlite3.connect('errscope.db')

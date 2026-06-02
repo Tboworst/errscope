@@ -1,4 +1,4 @@
-from dashboard.dashboard import ErrScopeApp
+from dashboard.dashboard import BeaconApp
 
 if __name__ == "__main__":
-    ErrScopeApp().run()
+    BeaconApp().run()

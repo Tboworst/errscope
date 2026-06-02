@@ -8,7 +8,7 @@ from rich.table import Table
 console = Console()
 
 # Connect to the same database file that storage.py writes to
-conn = sqlite3.connect('errscope.db')
+conn = sqlite3.connect('beacon.db')
 
 
 def format_timestamp(ts):
@@ -20,7 +20,7 @@ def format_timestamp(ts):
 
 def show_groups():
     # Build the Rich table with a title shown at the top
-    table = Table(title="ErrScope — Live Error Groups")
+    table = Table(title="Beacon — Live Error Groups")
 
     # Each column gets a name and a colour style
     # Count is the most important column — yellow makes it stand out

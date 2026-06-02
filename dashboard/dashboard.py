@@ -1,48 +1,57 @@
 import sqlite3
 from datetime import datetime
 
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Header, Label, Sparkline, Static
 
-DB_PATH = "errscope.db"
+DB_PATH = "beacon.db"
 
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 # each function opens its own connection so they are safe to call from any context
 
 def fetch_groups():
-    conn = sqlite3.connect(DB_PATH)
-    rows = conn.execute("""
-        SELECT fingerprint, exception_type, normalize_message,
-               function_chain, count, first_seen, last_seen
-        FROM groups
-        ORDER BY count DESC
-    """).fetchall()
-    conn.close()
-    return rows
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute("""
+            SELECT fingerprint, exception_type, normalize_message,
+                   function_chain, count, first_seen, last_seen
+            FROM groups
+            ORDER BY count DESC
+        """).fetchall()
+        conn.close()
+        return rows
+    except sqlite3.OperationalError:
+        # DB doesn't exist yet or tables not created — return empty until server starts
+        return []
 
 
 def fetch_stats():
-    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn = sqlite3.connect(DB_PATH)
 
-    total_events = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-    total_groups = conn.execute("SELECT COUNT(*) FROM groups").fetchone()[0]
+        total_events = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+        total_groups = conn.execute("SELECT COUNT(*) FROM groups").fetchone()[0]
 
-    # count events per minute for the last 20 minutes to power the sparkline
-    rate_rows = conn.execute("""
-        SELECT COUNT(*)
-        FROM events
-        WHERE timestamp >= datetime('now', '-20 minutes')
-        GROUP BY strftime('%Y-%m-%dT%H:%M', timestamp)
-        ORDER BY strftime('%Y-%m-%dT%H:%M', timestamp)
-    """).fetchall()
+        # count events per minute for the last 20 minutes to power the sparkline
+        rate_rows = conn.execute("""
+            SELECT COUNT(*)
+            FROM events
+            WHERE timestamp >= datetime('now', '-20 minutes')
+            GROUP BY strftime('%Y-%m-%dT%H:%M', timestamp)
+            ORDER BY strftime('%Y-%m-%dT%H:%M', timestamp)
+        """).fetchall()
 
-    conn.close()
-    sparkline_data = [float(r[0]) for r in rate_rows]
-    return total_events, total_groups, sparkline_data
+        conn.close()
+        sparkline_data = [float(r[0]) for r in rate_rows]
+        return total_events, total_groups, sparkline_data
+    except sqlite3.OperationalError:
+        # DB doesn't exist yet — return zeros until server starts
+        return 0, 0, []
 
 
 def fmt_ts(ts):
@@ -91,7 +100,7 @@ class DetailModal(ModalScreen):
 
 # ── Main app ──────────────────────────────────────────────────────────────────
 
-class ErrScopeApp(App):
+class BeaconApp(App):
 
     CSS = """
     Screen {
@@ -194,7 +203,7 @@ class ErrScopeApp(App):
         Binding("r", "manual_refresh", "Refresh"),
     ]
 
-    TITLE = "errscope"
+    TITLE = "beacon"
     SUB_TITLE = "live error monitoring"
 
     def compose(self) -> ComposeResult:
@@ -269,9 +278,17 @@ class ErrScopeApp(App):
                 self.push_screen(DetailModal(row))
                 break
 
+    def on_key(self, event: events.Key) -> None:
+        # prevent cursor wrapping — stop at top and bottom of the list
+        table = self.query_one("#groups-table", DataTable)
+        if event.key == "up" and table.cursor_row == 0:
+            event.prevent_default()
+        elif event.key == "down" and table.cursor_row >= table.row_count - 1:
+            event.prevent_default()
+
     def action_manual_refresh(self) -> None:
         self.refresh_data()
 
 
 if __name__ == "__main__":
-    ErrScopeApp().run()
+    BeaconApp().run()

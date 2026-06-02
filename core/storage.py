@@ -4,7 +4,7 @@ from .normalize import normalize_message
 from .alerts import check_and_alert
 
 #connecting the db, must create one if we dont have it yet,creations happen in connect
-conn = sqlite3.connect('errscope.db')
+conn = sqlite3.connect('beacon.db')
 
 #create a cursor object that runs the sql commands
 cur = conn.cursor()
@@ -41,7 +41,7 @@ def store_event(event):
 
     # open a new connection per call so this is safe to call from any thread
     # SQLite connections cannot be shared across threads
-    local_conn = sqlite3.connect('errscope.db')
+    local_conn = sqlite3.connect('beacon.db')
     local_cur = local_conn.cursor()
 
     #updates if the event is already in groups adds 1 and changes latest time

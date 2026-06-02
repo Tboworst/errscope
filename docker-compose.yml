@@ -1,11 +1,11 @@
 services:
-  errscope:
+  beacon:
     build: .
     ports:
       - "7000:7000"
     volumes:
       # persist the database outside the container
-      - ./errscope.db:/app/errscope.db
+      - ./beacon.db:/app/beacon.db
     env_file:
       - .env
     restart: unless-stopped

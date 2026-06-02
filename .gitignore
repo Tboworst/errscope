@@ -3,6 +3,7 @@
 
 # database
 *.db
+beacon.db
 
 # python
 __pycache__/

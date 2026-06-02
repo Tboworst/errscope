@@ -1,8 +1,8 @@
-# errscope
+# Beacon
 
 **Self-hosted error tracking and monitoring for developers who want control.**
 
-errscope ingests errors from any service, groups them by root cause, and surfaces everything in a live terminal dashboard — no third-party service, no data leaving your infrastructure, no monthly bill.
+Beacon ingests errors from any service, groups them by root cause, and surfaces everything in a live terminal dashboard — no third-party service, no data leaving your infrastructure, no monthly bill.
 
 Think lightweight Sentry, built for the terminal, owned by you.
 
@@ -11,7 +11,7 @@ Think lightweight Sentry, built for the terminal, owned by you.
 ## What it looks like
 
 ```
- errscope  live error monitoring
+ beacon  live error monitoring
 ┌─ error groups ─────────────────────────────────┐ ┌─ overview ────────┐
 │ #  exception        message           count     │ │ total events      │
 │ 1  AttributeError   NoneType has no…    142     │ │ 186               │
@@ -32,8 +32,8 @@ Press **enter** on any row to drill into the full stack trace, call chain, and t
 ## Quick start — Docker
 
 ```bash
-git clone https://github.com/Tboworst/errscope.git
-cd errscope
+git clone https://github.com/Tboworst/beacon.git
+cd beacon
 cp .env.example .env   # add your API key and Slack webhook
 docker-compose up
 ```
@@ -52,8 +52,8 @@ python3 start_dashboard.py
 ## Quick start — without Docker
 
 ```bash
-git clone https://github.com/Tboworst/errscope.git
-cd errscope
+git clone https://github.com/Tboworst/beacon.git
+cd beacon
 pip install -r requirements.txt
 cp .env.example .env
 python3 start_server.py      # terminal 1
@@ -70,16 +70,16 @@ Install in your app:
 pip install requests
 ```
 
-Copy `sdk/python/errscope/` into your project, then add two lines to your entry point:
+Copy `sdk/python/beacon/` into your project, then add two lines to your entry point:
 
 ```python
-import errscope
+import beacon
 
-errscope.init(
-    endpoint="http://your-errscope-server:7000/ingest",
+beacon.init(
+    endpoint="http://your-beacon-server:7000/ingest",
     service="my-app",
     environment="production",
-    api_key="your-secret-key-here"   # matches ERRSCOPE_API_KEY in .env
+    api_key="your-secret-key-here"   # matches BEACON_API_KEY in .env
 )
 ```
 
@@ -89,7 +89,7 @@ Every unhandled exception is now automatically captured. For handled exceptions:
 try:
     risky_operation()
 except Exception as e:
-    errscope.capture(e)
+    beacon.capture(e)
 ```
 
 ---
@@ -98,8 +98,8 @@ except Exception as e:
 
 | Variable | Description |
 |---|---|
-| `ERRSCOPE_API_KEY` | Secret key required on all ingest requests. If not set, server accepts all requests (local dev mode). |
-| `SLACK_WEBHOOK_URL` | Slack incoming webhook URL. Alerts fire when an error group exceeds 50 occurrences. |
+| `BEACON_API_KEY` | Secret key required on all ingest requests. If not set, server accepts all requests (local dev mode). |
+| `SLACK_WEBHOOK_URL` | Slack incoming webhook URL. Alerts fire when an error group crosses the threshold. |
 
 ---
 
@@ -116,7 +116,7 @@ fingerprint: AttributeError
 result:      same group. one bug. one row.
 ```
 
-Fingerprint = SHA-256 hash of exception type + normalized message + function call chain.
+Fingerprint = hash of exception type + normalized message + function call chain.
 Line numbers are ignored — they change on every reformat. Function names are stable.
 
 ---
@@ -124,7 +124,7 @@ Line numbers are ignored — they change on every reformat. Function names are s
 ## Project structure
 
 ```
-errscope/
+beacon/
 ├── core/               ← ingest server, storage, fingerprinting (Python → Go)
 ├── dashboard/          ← live TUI dashboard (Textual)
 ├── sdk/
@@ -185,7 +185,7 @@ curl -X POST http://localhost:7000/ingest \
 
 ## Why not just use Sentry?
 
-Sentry is excellent. errscope is for when you want:
+Sentry is excellent. Beacon is for when you want:
 - No data leaving your network
 - No per-event pricing at scale
 - A terminal-native workflow

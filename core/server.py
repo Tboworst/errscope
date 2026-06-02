@@ -5,9 +5,9 @@ from .storage import store_event
 
 app = Flask(__name__)
 
-# if ERRSCOPE_API_KEY is set, all ingest requests must include it
+# if BEACON_API_KEY is set, all ingest requests must include it
 # if not set, the server accepts all requests (local dev mode)
-API_KEY = os.environ.get("ERRSCOPE_API_KEY")
+API_KEY = os.environ.get("BEACON_API_KEY")
 
 
 @app.route('/ingest', methods=['POST'])

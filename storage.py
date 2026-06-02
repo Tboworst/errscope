@@ -1,6 +1,7 @@
 import sqlite3
 from fingerprinting import fingerprint
 from normalize import normalize_message
+from alerts import check_and_alert
 
 #connecting the db, must create one if we dont have it yet,creations happen in connect
 conn = sqlite3.connect('errscope.db')
@@ -54,5 +55,14 @@ def store_event(event):
 
     #makes sure the changes are committed and not lost
     local_conn.commit()
+
+    # check after commit so the count in the DB is already updated
+    row = local_cur.execute("SELECT count FROM groups WHERE fingerprint = ?", (fp,)).fetchone()
+    check_and_alert(fp, row[0])
+
+    # drop raw events older than 30 days — groups are kept forever
+    local_cur.execute("DELETE FROM events WHERE timestamp < datetime('now', '-30 days')")
+    local_conn.commit()
+
     local_conn.close()
 

@@ -1,0 +1,13 @@
+# secrets — never commit
+.env
+
+# database
+*.db
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+
+# test artifacts
+test_event.json

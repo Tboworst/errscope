@@ -18,17 +18,21 @@ CREATE TABLE IF NOT EXISTS groups(
             function_chain TEXT,
             count INTEGER,
             first_seen TEXT,
-            last_seen TEXT
+            last_seen TEXT,
+            service TEXT,
+            environment TEXT
             )''')
 
 
-#table for events will change when doing in golang 
+#table for events will change when doing in golang
 cur.execute('''
 CREATE TABLE IF NOT EXISTS events(
             fingerprint TEXT,
             timestamp TEXT,
             exception_type TEXT,
-            message TEXT
+            message TEXT,
+            service TEXT,
+            environment TEXT
             )''')
 
 conn.commit()
@@ -38,6 +42,8 @@ def store_event(event):
     fp = fingerprint(event)
     norm_msg = normalize_message(event["message"])
     fn_chain = "->".join(frame["function"] for frame in event["stack_trace"])
+    service = event.get("service") or "unknown"
+    environment = event.get("environment") or "unknown"
 
     # open a new connection per call so this is safe to call from any thread
     # SQLite connections cannot be shared across threads
@@ -45,13 +51,13 @@ def store_event(event):
     local_cur = local_conn.cursor()
 
     #updates if the event is already in groups adds 1 and changes latest time
-    local_cur.execute("INSERT INTO events VALUES (?, ?, ?, ?)", (fp, event["timestamp"], event["exception_type"], event["message"]))
+    local_cur.execute("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)", (fp, event["timestamp"], event["exception_type"], event["message"], service, environment))
     local_cur.execute("""
-        INSERT INTO groups VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO groups VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(fingerprint) DO UPDATE SET
             count = count + 1,
             last_seen = ?
-    """, (fp, event["exception_type"], norm_msg, fn_chain, 1, event["timestamp"], event["timestamp"], event["timestamp"]))
+    """, (fp, event["exception_type"], norm_msg, fn_chain, 1, event["timestamp"], event["timestamp"], service, environment, event["timestamp"]))
 
     #makes sure the changes are committed and not lost
     local_conn.commit()

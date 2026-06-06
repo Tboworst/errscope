@@ -94,6 +94,37 @@ SCENARIOS = [
         ],
         "weight": 5,
     },
+    # staging: auth-service — same error class as prod but separate group in staging
+    {
+        "service": "auth-service",
+        "environment": "staging",
+        "exception_type": "AttributeError",
+        "messages": [
+            "NoneType object has no attribute email for user 5001",
+            "NoneType object has no attribute email for user 5099",
+        ],
+        "stack_trace": [
+            {"function": "handle_request",    "file": "/app/auth/server.py",    "line": 58},
+            {"function": "authenticate_user", "file": "/app/auth/middleware.py", "line": 34},
+            {"function": "find_by_token",     "file": "/app/auth/db.py",         "line": 112},
+        ],
+        "weight": 8,
+    },
+    # staging: api-gateway — new experimental endpoint throwing errors
+    {
+        "service": "api-gateway",
+        "environment": "staging",
+        "exception_type": "NotImplementedError",
+        "messages": [
+            "handler for route /v2/export not yet implemented",
+            "handler for route /v2/export not yet implemented",
+        ],
+        "stack_trace": [
+            {"function": "dispatch",      "file": "/app/gateway/router.py",  "line": 91},
+            {"function": "route_request", "file": "/app/gateway/handler.py", "line": 14},
+        ],
+        "weight": 5,
+    },
 ]
 
 # build a weighted list so high-weight scenarios fire proportionally more
@@ -113,7 +144,7 @@ def send(scenario):
         "message": random.choice(scenario["messages"]),
         "stack_trace": scenario["stack_trace"],
         "service": scenario["service"],
-        "environment": "production",
+        "environment": scenario.get("environment", "production"),
     }
     try:
         r = requests.post(ENDPOINT, json=payload, timeout=3)

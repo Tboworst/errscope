@@ -14,19 +14,56 @@ DB_PATH = "beacon.db"
 # ── DB helpers ────────────────────────────────────────────────────────────────
 # each function opens its own connection so they are safe to call from any context
 
-def fetch_groups():
+def fetch_groups(env_filter=None):
     try:
         conn = sqlite3.connect(DB_PATH)
-        rows = conn.execute("""
-            SELECT fingerprint, exception_type, normalize_message,
-                   function_chain, count, first_seen, last_seen
-            FROM groups
-            ORDER BY count DESC
-        """).fetchall()
+        if env_filter:
+            rows = conn.execute("""
+                SELECT fingerprint, exception_type, normalize_message,
+                       function_chain, count, first_seen, last_seen, service, environment
+                FROM groups
+                WHERE environment = ?
+                ORDER BY count DESC
+            """, (env_filter,)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT fingerprint, exception_type, normalize_message,
+                       function_chain, count, first_seen, last_seen, service, environment
+                FROM groups
+                ORDER BY count DESC
+            """).fetchall()
         conn.close()
         return rows
     except sqlite3.OperationalError:
         # DB doesn't exist yet or tables not created — return empty until server starts
+        return []
+
+
+def fetch_group_by_fingerprint(fp):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        row = conn.execute("""
+            SELECT fingerprint, exception_type, normalize_message,
+                   function_chain, count, first_seen, last_seen, service, environment
+            FROM groups WHERE fingerprint = ?
+        """, (fp,)).fetchone()
+        conn.close()
+        return row
+    except sqlite3.OperationalError:
+        return None
+
+
+def fetch_environments():
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute("""
+            SELECT DISTINCT environment FROM groups
+            WHERE environment IS NOT NULL
+            ORDER BY environment
+        """).fetchall()
+        conn.close()
+        return [r[0] for r in rows]
+    except sqlite3.OperationalError:
         return []
 
 
@@ -73,13 +110,17 @@ class DetailModal(ModalScreen):
         self.row = row
 
     def compose(self) -> ComposeResult:
-        fp, exc_type, norm_msg, fn_chain, count, first_seen, last_seen = self.row
+        fp, exc_type, norm_msg, fn_chain, count, first_seen, last_seen, service, environment = self.row
 
         # each step in the call chain gets its own line for readability
         chain_lines = "\n  ".join(fn_chain.split("->"))
 
+        env_color = "red" if environment == "production" else "yellow"
+
         yield Vertical(
             Label(f"[bold red]{exc_type}[/bold red]", id="modal-title"),
+            Static(""),
+            Label(f"[dim]service[/dim]     {service}   [dim]env[/dim]  [{env_color}]{environment}[/{env_color}]"),
             Static(""),
             Label(f"[dim]message[/dim]"),
             Label(f"  {norm_msg}"),
@@ -201,10 +242,13 @@ class BeaconApp(App):
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("r", "manual_refresh", "Refresh"),
+        Binding("e", "cycle_env", "Env filter"),
     ]
 
     TITLE = "beacon"
-    SUB_TITLE = "live error monitoring"
+    SUB_TITLE = "all environments"
+
+    env_filter: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -222,7 +266,7 @@ class BeaconApp(App):
     def on_mount(self) -> None:
         table = self.query_one("#groups-table", DataTable)
         table.cursor_type = "row"
-        table.add_columns("#", "exception", "message", "count", "last seen")
+        table.add_columns("#", "exception", "message", "count", "service", "env", "last seen")
 
         # initial load then refresh every 2 seconds
         self.refresh_data()
@@ -236,10 +280,10 @@ class BeaconApp(App):
         table = self.query_one("#groups-table", DataTable)
         table.clear()
 
-        for i, row in enumerate(fetch_groups(), start=1):
-            _, exc_type, norm_msg, _, count, _, last_seen = row
+        for i, row in enumerate(fetch_groups(self.env_filter), start=1):
+            _, exc_type, norm_msg, _, count, _, last_seen, service, environment = row
 
-            short_msg = norm_msg[:42] + "…" if len(norm_msg) > 42 else norm_msg
+            short_msg = norm_msg[:30] + "…" if len(norm_msg) > 30 else norm_msg
 
             # colour count by severity: red when high, yellow when moderate
             if count >= 50:
@@ -249,11 +293,15 @@ class BeaconApp(App):
             else:
                 count_display = str(count)
 
+            env_display = f"[red]{environment}[/red]" if environment == "production" else f"[yellow]{environment}[/yellow]"
+
             table.add_row(
                 str(i),
                 f"[red]{exc_type}[/red]",
                 short_msg,
                 count_display,
+                service,
+                env_display,
                 fmt_ts(last_seen),
                 key=row[0],  # fingerprint as row key for detail lookup
             )
@@ -272,11 +320,25 @@ class BeaconApp(App):
         spark.data = sparkline_data if sparkline_data else [0.0]
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        # find the full row data by fingerprint and open the detail modal
-        for row in fetch_groups():
-            if row[0] == event.row_key.value:
-                self.push_screen(DetailModal(row))
-                break
+        row = fetch_group_by_fingerprint(event.row_key.value)
+        if row:
+            self.push_screen(DetailModal(row))
+
+    def action_cycle_env(self) -> None:
+        envs = fetch_environments()
+        if not envs:
+            return
+        # cycle: None → envs[0] → envs[1] → ... → None
+        if self.env_filter is None:
+            self.env_filter = envs[0]
+        else:
+            try:
+                idx = envs.index(self.env_filter)
+                self.env_filter = envs[idx + 1] if idx + 1 < len(envs) else None
+            except ValueError:
+                self.env_filter = None
+        self.sub_title = self.env_filter if self.env_filter else "all environments"
+        self.refresh_data()
 
     def on_key(self, event: events.Key) -> None:
         # prevent cursor wrapping — stop at top and bottom of the list

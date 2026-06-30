@@ -91,6 +91,57 @@ def fetch_stats():
         return 0, 0, []
 
 
+def fetch_spiking_fingerprints():
+    """
+    Return the set of fingerprints that are currently spiking.
+    Runs the same window comparison used in alerts.py so the dashboard
+    stays in sync with what triggered a Slack alert.
+
+    Checks every fingerprint that fired in the last 10 minutes and flags it
+    if its current 5-minute window is 5x higher than the previous 5-minute
+    window, or if it went from 0 to 5+ events (cold spike).
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+
+        # only check fingerprints that have been active recently
+        candidates = conn.execute("""
+            SELECT DISTINCT fingerprint FROM events
+            WHERE timestamp >= datetime('now', '-10 minutes')
+        """).fetchall()
+
+        spiking = set()
+
+        for (fp,) in candidates:
+            current = conn.execute("""
+                SELECT COUNT(*) FROM events
+                WHERE fingerprint = ?
+                AND timestamp >= datetime('now', '-5 minutes')
+            """, (fp,)).fetchone()[0]
+
+            previous = conn.execute("""
+                SELECT COUNT(*) FROM events
+                WHERE fingerprint = ?
+                AND timestamp >= datetime('now', '-10 minutes')
+                AND timestamp < datetime('now', '-5 minutes')
+            """, (fp,)).fetchone()[0]
+
+            # mirror the same thresholds used in alerts.py
+            if current < 3:
+                continue
+            if previous == 0 and current >= 5:
+                spiking.add(fp)
+            elif previous > 0 and (current / previous) >= 5:
+                spiking.add(fp)
+
+        conn.close()
+        return spiking
+
+    except sqlite3.OperationalError:
+        # DB not ready yet
+        return set()
+
+
 def fmt_ts(ts):
     try:
         return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").strftime("%b %d %H:%M")
@@ -280,13 +331,19 @@ class BeaconApp(App):
         table = self.query_one("#groups-table", DataTable)
         table.clear()
 
+        # fetch which groups are currently spiking so we can mark them
+        spiking = fetch_spiking_fingerprints()
+
         for i, row in enumerate(fetch_groups(self.env_filter), start=1):
-            _, exc_type, norm_msg, _, count, _, last_seen, service, environment = row
+            fp, exc_type, norm_msg, _, count, _, last_seen, service, environment = row
 
             short_msg = norm_msg[:30] + "…" if len(norm_msg) > 30 else norm_msg
 
-            # colour count by severity: red when high, yellow when moderate
-            if count >= 50:
+            # ↑ means this group's rate jumped 5x or more in the last 5 minutes
+            # takes priority over the standard severity colouring
+            if fp in spiking:
+                count_display = f"[bold red]↑ {count}[/bold red]"
+            elif count >= 50:
                 count_display = f"[bold red]{count}[/bold red]"
             elif count >= 10:
                 count_display = f"[yellow]{count}[/yellow]"
@@ -303,7 +360,7 @@ class BeaconApp(App):
                 service,
                 env_display,
                 fmt_ts(last_seen),
-                key=row[0],  # fingerprint as row key for detail lookup
+                key=fp,  # fingerprint as row key for detail lookup
             )
 
     def _update_stats(self) -> None:

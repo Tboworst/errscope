@@ -11,18 +11,8 @@ Think lightweight Sentry, built for the terminal, owned by you.
 ## What it looks like
 
 ```
- beacon  live error monitoring
-┌─ error groups ─────────────────────────────────┐ ┌─ overview ────────┐
-│ #  exception        message           count     │ │ total events      │
-│ 1  AttributeError   NoneType has no…    142     │ │ 186               │
-│ 2  KeyError         Missing key use…     38     │ │                   │
-│ 3  ValueError       invalid literal…     12     │ │ unique groups     │
-│                                                 │ │ 3                 │
-│                                                 │ │                   │
-│                                                 │ │ events / min      │
-│                                                 │ │ ▁▂▃▅▇█▅▃▂▁       │
-└─────────────────────────────────────────────────┘ └───────────────────┘
- q quit  r refresh  enter details
+<img width="1033" height="683" alt="Screenshot 2026-06-30 at 12 16 25 AM" src="https://github.com/user-attachments/assets/c6beae5b-e99d-4a06-9839-b5f43f1a67a4" />
+
 ```
 
 Press **enter** on any row to drill into the full stack trace, call chain, and timestamps.

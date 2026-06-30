@@ -11,7 +11,8 @@ Think lightweight Sentry, built for the terminal, owned by you.
 ## What it looks like
 
 ```
-<img width="1033" height="683" alt="Screenshot 2026-06-30 at 12 16 25 AM" src="https://github.com/user-attachments/assets/c6beae5b-e99d-4a06-9839-b5f43f1a67a4" />
+<img width="1031" height="673" alt="Screenshot 2026-06-30 at 12 17 01 AM" src="https://github.com/user-attachments/assets/7b6174b9-57a9-4aa9-a32a-40dcdc854900" />
+
 
 ```
 

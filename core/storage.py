@@ -1,7 +1,7 @@
 import sqlite3
 from .fingerprinting import fingerprint
 from .normalize import normalize_message
-from .alerts import check_and_alert, check_spike
+from .alerts import check_and_alert, check_spike, alert_regression
 
 #connecting the db, must create one if we dont have it yet,creations happen in connect
 conn = sqlite3.connect('beacon.db')
@@ -37,6 +37,28 @@ CREATE TABLE IF NOT EXISTS events(
 
 conn.commit()
 
+# Migration: add resolve/regression columns to existing databases
+for _col_sql in [
+    "ALTER TABLE groups ADD COLUMN status TEXT DEFAULT 'active'",
+    "ALTER TABLE groups ADD COLUMN resolved_at TEXT",
+]:
+    try:
+        cur.execute(_col_sql)
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # column already exists
+
+
+def resolve_group(fp):
+    """Mark an error group as resolved. If the same error fires again, a regression alert is sent."""
+    local_conn = sqlite3.connect('beacon.db')
+    local_conn.execute(
+        "UPDATE groups SET status = 'resolved', resolved_at = datetime('now') WHERE fingerprint = ?",
+        (fp,)
+    )
+    local_conn.commit()
+    local_conn.close()
+
 
 def store_event(event):
     fp = fingerprint(event)
@@ -50,17 +72,35 @@ def store_event(event):
     local_conn = sqlite3.connect('beacon.db')
     local_cur = local_conn.cursor()
 
-    #updates if the event is already in groups adds 1 and changes latest time
+    # Regression detection: check current status before the upsert so we know
+    # if this event is a recurrence of something the user already marked resolved
+    existing = local_cur.execute(
+        "SELECT status FROM groups WHERE fingerprint = ?", (fp,)
+    ).fetchone()
+    was_resolved = existing is not None and existing[0] == 'resolved'
+
     local_cur.execute("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)", (fp, event["timestamp"], event["exception_type"], event["message"], service, environment))
+
+    # Upsert group — if it was resolved, mark it as regressed and clear resolved_at
     local_cur.execute("""
-        INSERT INTO groups VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO groups VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL)
         ON CONFLICT(fingerprint) DO UPDATE SET
             count = count + 1,
-            last_seen = ?
+            last_seen = ?,
+            status = CASE WHEN status = 'resolved' THEN 'regressed' ELSE status END,
+            resolved_at = CASE WHEN status = 'resolved' THEN NULL ELSE resolved_at END
     """, (fp, event["exception_type"], norm_msg, fn_chain, 1, event["timestamp"], event["timestamp"], service, environment, event["timestamp"]))
 
     #makes sure the changes are committed and not lost
     local_conn.commit()
+
+    # If this is a regression, fire the regression alert immediately
+    if was_resolved:
+        grp = local_cur.execute(
+            "SELECT exception_type, service, environment FROM groups WHERE fingerprint = ?", (fp,)
+        ).fetchone()
+        if grp:
+            alert_regression(fp, grp[0], grp[1], grp[2])
 
     # check after commit so the count in the DB is already updated
     row = local_cur.execute("SELECT count FROM groups WHERE fingerprint = ?", (fp,)).fetchone()

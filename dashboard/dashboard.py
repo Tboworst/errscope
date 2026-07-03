@@ -14,28 +14,51 @@ DB_PATH = "beacon.db"
 # ── DB helpers ────────────────────────────────────────────────────────────────
 # each function opens its own connection so they are safe to call from any context
 
-def fetch_groups(env_filter=None):
+def _migrate_db():
+    """Add any missing columns so the dashboard works against older databases."""
     try:
         conn = sqlite3.connect(DB_PATH)
+        for sql in [
+            "ALTER TABLE groups ADD COLUMN status TEXT DEFAULT 'active'",
+            "ALTER TABLE groups ADD COLUMN resolved_at TEXT",
+        ]:
+            try:
+                conn.execute(sql)
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass  # column already exists
+        conn.close()
+    except sqlite3.OperationalError:
+        pass  # db doesn't exist yet — server hasn't started
+
+
+def fetch_groups(env_filter=None, show_resolved=False):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+
+        conditions = []
+        params = []
+
         if env_filter:
-            rows = conn.execute("""
-                SELECT fingerprint, exception_type, normalize_message,
-                       function_chain, count, first_seen, last_seen, service, environment
-                FROM groups
-                WHERE environment = ?
-                ORDER BY count DESC
-            """, (env_filter,)).fetchall()
-        else:
-            rows = conn.execute("""
-                SELECT fingerprint, exception_type, normalize_message,
-                       function_chain, count, first_seen, last_seen, service, environment
-                FROM groups
-                ORDER BY count DESC
-            """).fetchall()
+            conditions.append("environment = ?")
+            params.append(env_filter)
+
+        if not show_resolved:
+            conditions.append("(status IS NULL OR status != 'resolved')")
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+        rows = conn.execute(f"""
+            SELECT fingerprint, exception_type, normalize_message,
+                   function_chain, count, first_seen, last_seen, service, environment,
+                   COALESCE(status, 'active'), resolved_at
+            FROM groups
+            {where}
+            ORDER BY count DESC
+        """, params).fetchall()
         conn.close()
         return rows
     except sqlite3.OperationalError:
-        # DB doesn't exist yet or tables not created — return empty until server starts
         return []
 
 
@@ -44,7 +67,8 @@ def fetch_group_by_fingerprint(fp):
         conn = sqlite3.connect(DB_PATH)
         row = conn.execute("""
             SELECT fingerprint, exception_type, normalize_message,
-                   function_chain, count, first_seen, last_seen, service, environment
+                   function_chain, count, first_seen, last_seen, service, environment,
+                   COALESCE(status, 'active'), resolved_at
             FROM groups WHERE fingerprint = ?
         """, (fp,)).fetchone()
         conn.close()
@@ -72,7 +96,12 @@ def fetch_stats():
         conn = sqlite3.connect(DB_PATH)
 
         total_events = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-        total_groups = conn.execute("SELECT COUNT(*) FROM groups").fetchone()[0]
+        total_groups = conn.execute(
+            "SELECT COUNT(*) FROM groups WHERE status IS NULL OR status IN ('active', 'regressed')"
+        ).fetchone()[0]
+        resolved_count = conn.execute(
+            "SELECT COUNT(*) FROM groups WHERE status = 'resolved'"
+        ).fetchone()[0]
 
         # count events per minute for the last 20 minutes to power the sparkline
         rate_rows = conn.execute("""
@@ -85,10 +114,9 @@ def fetch_stats():
 
         conn.close()
         sparkline_data = [float(r[0]) for r in rate_rows]
-        return total_events, total_groups, sparkline_data
+        return total_events, total_groups, sparkline_data, resolved_count
     except sqlite3.OperationalError:
-        # DB doesn't exist yet — return zeros until server starts
-        return 0, 0, []
+        return 0, 0, [], 0
 
 
 def fetch_spiking_fingerprints():
@@ -96,15 +124,10 @@ def fetch_spiking_fingerprints():
     Return the set of fingerprints that are currently spiking.
     Runs the same window comparison used in alerts.py so the dashboard
     stays in sync with what triggered a Slack alert.
-
-    Checks every fingerprint that fired in the last 10 minutes and flags it
-    if its current 5-minute window is 5x higher than the previous 5-minute
-    window, or if it went from 0 to 5+ events (cold spike).
     """
     try:
         conn = sqlite3.connect(DB_PATH)
 
-        # only check fingerprints that have been active recently
         candidates = conn.execute("""
             SELECT DISTINCT fingerprint FROM events
             WHERE timestamp >= datetime('now', '-10 minutes')
@@ -126,7 +149,6 @@ def fetch_spiking_fingerprints():
                 AND timestamp < datetime('now', '-5 minutes')
             """, (fp,)).fetchone()[0]
 
-            # mirror the same thresholds used in alerts.py
             if current < 3:
                 continue
             if previous == 0 and current >= 5:
@@ -138,11 +160,26 @@ def fetch_spiking_fingerprints():
         return spiking
 
     except sqlite3.OperationalError:
-        # DB not ready yet
         return set()
 
 
+def resolve_group(fp):
+    """Mark a group as resolved. Any future occurrence will trigger a regression alert."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute(
+            "UPDATE groups SET status = 'resolved', resolved_at = datetime('now') WHERE fingerprint = ?",
+            (fp,)
+        )
+        conn.commit()
+        conn.close()
+    except sqlite3.OperationalError:
+        pass
+
+
 def fmt_ts(ts):
+    if not ts:
+        return ""
     try:
         return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").strftime("%b %d %H:%M")
     except Exception:
@@ -161,22 +198,27 @@ class DetailModal(ModalScreen):
         self.row = row
 
     def compose(self) -> ComposeResult:
-        fp, exc_type, norm_msg, fn_chain, count, first_seen, last_seen, service, environment = self.row
+        fp, exc_type, norm_msg, fn_chain, count, first_seen, last_seen, service, environment, status, resolved_at = self.row
 
-        # each step in the call chain gets its own line for readability
         chain_lines = "\n  ".join(fn_chain.split("->"))
-
         env_color = "red" if environment == "production" else "yellow"
 
-        yield Vertical(
-            Label(f"[bold red]{exc_type}[/bold red]", id="modal-title"),
+        widgets = [Label(f"[bold red]{exc_type}[/bold red]", id="modal-title")]
+
+        if status == 'regressed':
+            widgets.append(Label("[bold #ff9a3c]↩ regressed — came back after being resolved[/bold #ff9a3c]"))
+        elif status == 'resolved':
+            resolved_str = f"  ({fmt_ts(resolved_at)})" if resolved_at else ""
+            widgets.append(Label(f"[dim]✓ resolved{resolved_str}[/dim]"))
+
+        widgets.extend([
             Static(""),
             Label(f"[dim]service[/dim]     {service}   [dim]env[/dim]  [{env_color}]{environment}[/{env_color}]"),
             Static(""),
-            Label(f"[dim]message[/dim]"),
+            Label("[dim]message[/dim]"),
             Label(f"  {norm_msg}"),
             Static(""),
-            Label(f"[dim]call chain[/dim]"),
+            Label("[dim]call chain[/dim]"),
             Label(f"  {chain_lines}"),
             Static(""),
             Label(f"[dim]count[/dim]       [yellow]{count}[/yellow]"),
@@ -186,8 +228,9 @@ class DetailModal(ModalScreen):
             Label(f"[dim]{fp}[/dim]"),
             Static(""),
             Label("[dim]ESC to close[/dim]"),
-            id="modal-box",
-        )
+        ])
+
+        yield Vertical(*widgets, id="modal-box")
 
 
 # ── Main app ──────────────────────────────────────────────────────────────────
@@ -294,12 +337,15 @@ class BeaconApp(App):
         Binding("q", "quit", "Quit"),
         Binding("r", "manual_refresh", "Refresh"),
         Binding("e", "cycle_env", "Env filter"),
+        Binding("x", "resolve_group", "Resolve"),
+        Binding("h", "toggle_resolved", "History"),
     ]
 
     TITLE = "beacon"
     SUB_TITLE = "all environments"
 
     env_filter: str | None = None
+    show_resolved: bool = False
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -315,11 +361,12 @@ class BeaconApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        _migrate_db()
+
         table = self.query_one("#groups-table", DataTable)
         table.cursor_type = "row"
         table.add_columns("#", "exception", "message", "count", "service", "env", "last seen")
 
-        # initial load then refresh every 2 seconds
         self.refresh_data()
         self.set_interval(2, self.refresh_data)
 
@@ -331,18 +378,36 @@ class BeaconApp(App):
         table = self.query_one("#groups-table", DataTable)
         table.clear()
 
-        # fetch which groups are currently spiking so we can mark them
         spiking = fetch_spiking_fingerprints()
 
-        for i, row in enumerate(fetch_groups(self.env_filter), start=1):
-            fp, exc_type, norm_msg, _, count, _, last_seen, service, environment = row
+        for i, row in enumerate(fetch_groups(self.env_filter, self.show_resolved), start=1):
+            fp, exc_type, norm_msg, _, count, _, last_seen, service, environment, status, _ = row
 
             short_msg = norm_msg[:30] + "…" if len(norm_msg) > 30 else norm_msg
 
-            # ↑ means this group's rate jumped 5x or more in the last 5 minutes
-            # takes priority over the standard severity colouring
-            if fp in spiking:
+            # row number — orange for regressions, dim for resolved
+            if status == 'regressed':
+                row_num = f"[bold #ff9a3c]{i}[/bold #ff9a3c]"
+            elif status == 'resolved':
+                row_num = f"[dim]{i}[/dim]"
+            else:
+                row_num = str(i)
+
+            # exception type — prefix with regression indicator
+            if status == 'regressed':
+                exc_display = f"[bold #ff9a3c]↩ {exc_type}[/bold #ff9a3c]"
+            elif status == 'resolved':
+                exc_display = f"[dim]{exc_type}[/dim]"
+            elif fp in spiking:
+                exc_display = f"[bold red]{exc_type}[/bold red]"
+            else:
+                exc_display = f"[red]{exc_type}[/red]"
+
+            # count — spike takes priority, then severity colouring
+            if fp in spiking and status != 'resolved':
                 count_display = f"[bold red]↑ {count}[/bold red]"
+            elif status == 'resolved':
+                count_display = f"[dim]{count}[/dim]"
             elif count >= 50:
                 count_display = f"[bold red]{count}[/bold red]"
             elif count >= 10:
@@ -350,28 +415,41 @@ class BeaconApp(App):
             else:
                 count_display = str(count)
 
-            env_display = f"[red]{environment}[/red]" if environment == "production" else f"[yellow]{environment}[/yellow]"
+            env_display = (
+                f"[red]{environment}[/red]"
+                if environment == "production"
+                else f"[yellow]{environment}[/yellow]"
+            )
+            if status == 'resolved':
+                env_display = f"[dim]{environment}[/dim]"
 
             table.add_row(
-                str(i),
-                f"[red]{exc_type}[/red]",
+                row_num,
+                exc_display,
                 short_msg,
                 count_display,
                 service,
                 env_display,
                 fmt_ts(last_seen),
-                key=fp,  # fingerprint as row key for detail lookup
+                key=fp,
             )
 
     def _update_stats(self) -> None:
-        total, groups, sparkline_data = fetch_stats()
+        total, groups, sparkline_data, resolved = fetch_stats()
 
-        self.query_one("#stats", Static).update(
+        stats_text = (
             f"[dim]total events[/dim]\n"
             f"[bold #58a6ff]{total}[/bold #58a6ff]\n\n"
-            f"[dim]unique groups[/dim]\n"
+            f"[dim]active groups[/dim]\n"
             f"[bold #58a6ff]{groups}[/bold #58a6ff]"
         )
+        if resolved > 0:
+            stats_text += (
+                f"\n\n[dim]resolved[/dim]\n"
+                f"[dim #58a6ff]{resolved}[/dim #58a6ff]  [dim](h to view)[/dim]"
+            )
+
+        self.query_one("#stats", Static).update(stats_text)
 
         spark = self.query_one("#sparkline", Sparkline)
         spark.data = sparkline_data if sparkline_data else [0.0]
@@ -381,11 +459,28 @@ class BeaconApp(App):
         if row:
             self.push_screen(DetailModal(row))
 
+    def action_resolve_group(self) -> None:
+        table = self.query_one("#groups-table", DataTable)
+        if table.row_count == 0:
+            return
+        row_keys = list(table.rows.keys())
+        if table.cursor_row >= len(row_keys):
+            return
+        fp = row_keys[table.cursor_row].value
+        resolve_group(fp)
+        self.notify("Resolved. You'll be alerted immediately if it comes back.")
+        self.refresh_data()
+
+    def action_toggle_resolved(self) -> None:
+        self.show_resolved = not self.show_resolved
+        label = "showing resolved groups" if self.show_resolved else "hiding resolved groups"
+        self.notify(label)
+        self.refresh_data()
+
     def action_cycle_env(self) -> None:
         envs = fetch_environments()
         if not envs:
             return
-        # cycle: None → envs[0] → envs[1] → ... → None
         if self.env_filter is None:
             self.env_filter = envs[0]
         else:

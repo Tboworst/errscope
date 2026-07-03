@@ -79,3 +79,19 @@ def check_spike(fingerprint):
             f"({ratio:.1f}x)"
         )
         requests.post(URL, json={"text": message})
+
+
+def alert_regression(fingerprint, exc_type, service, environment):
+    """
+    Fire an alert when a previously-resolved error group is seen again.
+
+    This is the 'it came back' signal — teams care about this more than any
+    other alert because it means a deploy didn't actually fix the bug.
+    """
+    if not URL:
+        return
+    message = (
+        f"[beacon] regression: {exc_type} came back in {service}/{environment} "
+        f"after being marked resolved — {fingerprint}"
+    )
+    requests.post(URL, json={"text": message})

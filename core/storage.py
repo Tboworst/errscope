@@ -37,10 +37,12 @@ CREATE TABLE IF NOT EXISTS events(
 
 conn.commit()
 
-# Migration: add resolve/regression columns to existing databases
+# Migration: add columns to existing databases
 for _col_sql in [
     "ALTER TABLE groups ADD COLUMN status TEXT DEFAULT 'active'",
     "ALTER TABLE groups ADD COLUMN resolved_at TEXT",
+    "ALTER TABLE groups ADD COLUMN github_issue_url TEXT",
+    "ALTER TABLE groups ADD COLUMN github_issue_number INTEGER",
 ]:
     try:
         cur.execute(_col_sql)

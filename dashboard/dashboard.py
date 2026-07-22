@@ -8,6 +8,8 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Header, Label, Sparkline, Static
 
+from core.github import create_issue, close_issue, github_configured
+
 DB_PATH = "beacon.db"
 
 
@@ -21,6 +23,8 @@ def _migrate_db():
         for sql in [
             "ALTER TABLE groups ADD COLUMN status TEXT DEFAULT 'active'",
             "ALTER TABLE groups ADD COLUMN resolved_at TEXT",
+            "ALTER TABLE groups ADD COLUMN github_issue_url TEXT",
+            "ALTER TABLE groups ADD COLUMN github_issue_number INTEGER",
         ]:
             try:
                 conn.execute(sql)
@@ -68,13 +72,27 @@ def fetch_group_by_fingerprint(fp):
         row = conn.execute("""
             SELECT fingerprint, exception_type, normalize_message,
                    function_chain, count, first_seen, last_seen, service, environment,
-                   COALESCE(status, 'active'), resolved_at
+                   COALESCE(status, 'active'), resolved_at,
+                   github_issue_url, github_issue_number
             FROM groups WHERE fingerprint = ?
         """, (fp,)).fetchone()
         conn.close()
         return row
     except sqlite3.OperationalError:
         return None
+
+
+def save_github_issue(fp, url, number):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute(
+            "UPDATE groups SET github_issue_url = ?, github_issue_number = ? WHERE fingerprint = ?",
+            (url, number, fp),
+        )
+        conn.commit()
+        conn.close()
+    except sqlite3.OperationalError:
+        pass
 
 
 def fetch_environments():
@@ -198,7 +216,7 @@ class DetailModal(ModalScreen):
         self.row = row
 
     def compose(self) -> ComposeResult:
-        fp, exc_type, norm_msg, fn_chain, count, first_seen, last_seen, service, environment, status, resolved_at = self.row
+        fp, exc_type, norm_msg, fn_chain, count, first_seen, last_seen, service, environment, status, resolved_at, github_issue_url, github_issue_number = self.row
 
         chain_lines = "\n  ".join(fn_chain.split("->"))
         env_color = "red" if environment == "production" else "yellow"
@@ -226,8 +244,17 @@ class DetailModal(ModalScreen):
             Label(f"[dim]last seen[/dim]   [green]{fmt_ts(last_seen)}[/green]"),
             Static(""),
             Label(f"[dim]{fp}[/dim]"),
+        ])
+
+        if github_issue_url:
+            widgets.extend([
+                Static(""),
+                Label(f"[dim]github[/dim]      [link={github_issue_url}][#58a6ff]#{github_issue_number} ↗[/#58a6ff][/link]"),
+            ])
+
+        widgets.extend([
             Static(""),
-            Label("[dim]ESC to close[/dim]"),
+            Label("[dim]g  github issue   x  resolve   ESC  close[/dim]"),
         ])
 
         yield Vertical(*widgets, id="modal-box")
@@ -339,6 +366,7 @@ class BeaconApp(App):
         Binding("e", "cycle_env", "Env filter"),
         Binding("x", "resolve_group", "Resolve"),
         Binding("h", "toggle_resolved", "History"),
+        Binding("g", "open_github", "GitHub Issue"),
     ]
 
     TITLE = "beacon"
@@ -467,8 +495,57 @@ class BeaconApp(App):
         if table.cursor_row >= len(row_keys):
             return
         fp = row_keys[table.cursor_row].value
+
+        # capture github info before resolving
+        row = fetch_group_by_fingerprint(fp)
+        issue_number = row[12] if row else None
+
         resolve_group(fp)
-        self.notify("Resolved. You'll be alerted immediately if it comes back.")
+
+        if issue_number:
+            try:
+                close_issue(issue_number)
+                self.notify(f"Resolved and closed GitHub issue #{issue_number}.")
+            except Exception:
+                self.notify("Resolved. (Could not close GitHub issue — check GITHUB_TOKEN.)")
+        else:
+            self.notify("Resolved. You'll be alerted immediately if it comes back.")
+
+        self.refresh_data()
+
+    def action_open_github(self) -> None:
+        table = self.query_one("#groups-table", DataTable)
+        if table.row_count == 0:
+            return
+        row_keys = list(table.rows.keys())
+        if table.cursor_row >= len(row_keys):
+            return
+        fp = row_keys[table.cursor_row].value
+
+        row = fetch_group_by_fingerprint(fp)
+        if not row:
+            return
+
+        fp, exc_type, norm_msg, fn_chain, count, first_seen, last_seen, service, environment, _, _, github_issue_url, _ = row
+
+        if github_issue_url:
+            self.notify(f"Already linked: {github_issue_url}")
+            return
+
+        if not github_configured():
+            self.notify("Set GITHUB_TOKEN and GITHUB_REPO to enable GitHub issues.", severity="error")
+            return
+
+        try:
+            number, url = create_issue(
+                fp, exc_type, norm_msg, fn_chain, count, first_seen, last_seen, service, environment
+            )
+            save_github_issue(fp, url, number)
+            self.notify(f"GitHub issue #{number} created.")
+        except Exception as e:
+            self.notify(f"GitHub error: {e}", severity="error")
+            return
+
         self.refresh_data()
 
     def action_toggle_resolved(self) -> None:

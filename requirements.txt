@@ -2,3 +2,4 @@ flask
 watchdog
 textual
 requests
+python-dotenv

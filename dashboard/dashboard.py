@@ -31,6 +31,25 @@ def _migrate_db():
                 conn.commit()
             except sqlite3.OperationalError:
                 pass  # column already exists
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS llm_events(
+                fingerprint TEXT, timestamp TEXT, model TEXT, feature TEXT,
+                service TEXT, environment TEXT, input_tokens INTEGER,
+                output_tokens INTEGER, latency_ms INTEGER, cost_usd REAL,
+                is_error INTEGER
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS llm_groups(
+                fingerprint TEXT PRIMARY KEY, model TEXT, feature TEXT,
+                service TEXT, environment TEXT,
+                total_calls INTEGER, total_errors INTEGER,
+                total_input_tokens INTEGER, total_output_tokens INTEGER,
+                total_cost_usd REAL, total_latency_ms INTEGER,
+                first_seen TEXT, last_seen TEXT
+            )
+        """)
+        conn.commit()
         conn.close()
     except sqlite3.OperationalError:
         pass  # db doesn't exist yet — server hasn't started
@@ -181,6 +200,28 @@ def fetch_spiking_fingerprints():
         return set()
 
 
+def fetch_llm_groups():
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute("""
+            SELECT fingerprint, model, feature, service, environment,
+                   total_calls, total_errors,
+                   CASE WHEN total_calls > 0
+                        THEN ROUND(100.0 * total_errors / total_calls, 1)
+                        ELSE 0.0 END AS error_pct,
+                   CASE WHEN total_calls > 0
+                        THEN ROUND(1.0 * total_latency_ms / total_calls, 0)
+                        ELSE 0 END AS avg_latency_ms,
+                   total_cost_usd, last_seen
+            FROM llm_groups
+            ORDER BY total_cost_usd DESC
+        """).fetchall()
+        conn.close()
+        return rows
+    except sqlite3.OperationalError:
+        return []
+
+
 def resolve_group(fp):
     """Mark a group as resolved. Any future occurrence will trigger a regression alert."""
     try:
@@ -297,7 +338,7 @@ class BeaconApp(App):
         margin-left: 1;
     }
 
-    #panel-title {
+    #panel-title, #left-panel-title {
         color: #a5d6ff;
         text-style: bold;
         margin-bottom: 1;
@@ -367,6 +408,7 @@ class BeaconApp(App):
         Binding("x", "resolve_group", "Resolve"),
         Binding("h", "toggle_resolved", "History"),
         Binding("g", "open_github", "GitHub Issue"),
+        Binding("l", "toggle_llm_view", "LLM view"),
     ]
 
     TITLE = "beacon"
@@ -374,12 +416,13 @@ class BeaconApp(App):
 
     env_filter: str | None = None
     show_resolved: bool = False
+    _llm_view: bool = False
 
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal(id="body"):
             with Vertical(id="left-panel"):
-                yield Label("error groups", id="panel-title")
+                yield Label("error groups", id="left-panel-title")
                 yield DataTable(id="groups-table")
             with Vertical(id="right-panel"):
                 yield Label("overview", id="panel-title")
@@ -400,9 +443,18 @@ class BeaconApp(App):
 
     def refresh_data(self) -> None:
         self._update_table()
-        self._update_stats()
+        if self._llm_view:
+            self._update_llm_stats()
+        else:
+            self._update_stats()
 
     def _update_table(self) -> None:
+        if self._llm_view:
+            self._render_llm_table()
+        else:
+            self._render_error_table()
+
+    def _render_error_table(self) -> None:
         table = self.query_one("#groups-table", DataTable)
         table.clear()
 
@@ -482,12 +534,81 @@ class BeaconApp(App):
         spark = self.query_one("#sparkline", Sparkline)
         spark.data = sparkline_data if sparkline_data else [0.0]
 
+    def _render_llm_table(self) -> None:
+        table = self.query_one("#groups-table", DataTable)
+        table.clear()
+
+        for i, row in enumerate(fetch_llm_groups(), start=1):
+            fp, model, feature, service, environment, total_calls, total_errors, error_pct, avg_latency, total_cost, last_seen = row
+
+            feature_display = feature if feature and feature != "unknown" else "-"
+
+            if error_pct >= 10:
+                err_pct_display = f"[red]{error_pct:.1f}%[/red]"
+            elif error_pct >= 2:
+                err_pct_display = f"[yellow]{error_pct:.1f}%[/yellow]"
+            else:
+                err_pct_display = f"{error_pct:.1f}%"
+
+            if total_cost >= 1.0:
+                cost_display = f"[red]${total_cost:.4f}[/red]"
+            elif total_cost >= 0.10:
+                cost_display = f"[yellow]${total_cost:.4f}[/yellow]"
+            else:
+                cost_display = f"${total_cost:.4f}"
+
+            table.add_row(
+                str(i),
+                model,
+                feature_display,
+                service,
+                environment,
+                str(total_calls),
+                str(total_errors),
+                err_pct_display,
+                f"{int(avg_latency)}ms",
+                cost_display,
+                fmt_ts(last_seen),
+                key=fp,
+            )
+
+    def _update_llm_stats(self) -> None:
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            total_calls = conn.execute(
+                "SELECT COALESCE(SUM(total_calls), 0) FROM llm_groups"
+            ).fetchone()[0]
+            total_cost = conn.execute(
+                "SELECT COALESCE(SUM(total_cost_usd), 0.0) FROM llm_groups"
+            ).fetchone()[0]
+            total_errors = conn.execute(
+                "SELECT COALESCE(SUM(total_errors), 0) FROM llm_groups"
+            ).fetchone()[0]
+            conn.close()
+        except sqlite3.OperationalError:
+            total_calls, total_cost, total_errors = 0, 0.0, 0
+
+        stats_text = (
+            f"[dim]total calls[/dim]\n"
+            f"[bold #58a6ff]{total_calls}[/bold #58a6ff]\n\n"
+            f"[dim]total cost[/dim]\n"
+            f"[bold #58a6ff]${total_cost:.4f}[/bold #58a6ff]\n\n"
+            f"[dim]total errors[/dim]\n"
+            f"[bold #58a6ff]{total_errors}[/bold #58a6ff]"
+        )
+        self.query_one("#stats", Static).update(stats_text)
+        self.query_one("#sparkline", Sparkline).data = [0.0]
+
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if self._llm_view:
+            return
         row = fetch_group_by_fingerprint(event.row_key.value)
         if row:
             self.push_screen(DetailModal(row))
 
     def action_resolve_group(self) -> None:
+        if self._llm_view:
+            return
         table = self.query_one("#groups-table", DataTable)
         if table.row_count == 0:
             return
@@ -514,6 +635,8 @@ class BeaconApp(App):
         self.refresh_data()
 
     def action_open_github(self) -> None:
+        if self._llm_view:
+            return
         table = self.query_one("#groups-table", DataTable)
         if table.row_count == 0:
             return
@@ -545,6 +668,22 @@ class BeaconApp(App):
         except Exception as e:
             self.notify(f"GitHub error: {e}", severity="error")
             return
+
+        self.refresh_data()
+
+    def action_toggle_llm_view(self) -> None:
+        self._llm_view = not self._llm_view
+        table = self.query_one("#groups-table", DataTable)
+        table.clear(columns=True)
+
+        if self._llm_view:
+            table.add_columns("#", "model", "feature", "service", "env", "calls", "errors", "err%", "avg_latency", "total_cost", "last seen")
+            self.query_one("#left-panel-title", Label).update("llm calls")
+            self.query_one("#sparkline-label", Label).update("")
+        else:
+            table.add_columns("#", "exception", "message", "count", "service", "env", "last seen")
+            self.query_one("#left-panel-title", Label).update("error groups")
+            self.query_one("#sparkline-label", Label).update("events / min  (last 20m)")
 
         self.refresh_data()
 

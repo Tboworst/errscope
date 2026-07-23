@@ -66,3 +66,33 @@ def _post(payload):
     except Exception:
         # if errscope is down the user's app must keep running
         pass
+
+
+def _post_llm(payload, endpoint):
+    try:
+        headers = {"X-Api-Key": _api_key} if _api_key else {}
+        requests.post(endpoint, json=payload, headers=headers, timeout=5)
+    except Exception:
+        pass
+
+
+def capture_llm(model, prompt_hash, input_tokens, output_tokens, latency_ms, cost_usd, feature=None, error=None):
+    """Capture a single LLM call (success or failure) and send it to Beacon."""
+    if not _endpoint:
+        return
+    endpoint = _endpoint.rstrip("/") + "/llm"
+    payload = {
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "model": model,
+        "prompt_hash": str(prompt_hash),
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "latency_ms": latency_ms,
+        "cost_usd": cost_usd,
+        "feature": feature,
+        "service": _service,
+        "environment": _environment,
+        "error": str(error) if error else None,
+    }
+    thread = threading.Thread(target=_post_llm, args=(payload, endpoint), daemon=True)
+    thread.start()

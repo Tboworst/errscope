@@ -53,6 +53,56 @@ python3 start_dashboard.py   # terminal 2
 
 ---
 
+## Node.js SDK
+
+Copy `sdk/node/` into your project (or `npm install beacon-monitor` once published):
+
+```js
+const beacon = require('./beacon');
+
+beacon.init({
+  endpoint: 'http://your-beacon-server:7000/ingest',
+  service: 'my-app',
+  environment: 'production',
+  apiKey: 'your-secret-key-here',
+});
+```
+
+Unhandled exceptions and promise rejections are captured automatically. For caught errors:
+
+```js
+try {
+  riskyOperation();
+} catch (err) {
+  beacon.capture(err);
+}
+```
+
+LLM call tracking:
+
+```js
+const t0 = Date.now();
+try {
+  const res = await openai.chat.completions.create({ model: 'gpt-4o', messages });
+  beacon.captureLlm({
+    model: 'gpt-4o',
+    inputTokens: res.usage.prompt_tokens,
+    outputTokens: res.usage.completion_tokens,
+    latencyMs: Date.now() - t0,
+    costUsd: res.usage.prompt_tokens * 0.000005 + res.usage.completion_tokens * 0.000015,
+    feature: 'document-summarizer',
+  });
+} catch (err) {
+  beacon.captureLlm({ model: 'gpt-4o', inputTokens: 0, outputTokens: 0,
+                      latencyMs: Date.now() - t0, costUsd: 0,
+                      feature: 'document-summarizer', error: err });
+}
+```
+
+Zero dependencies — uses Node's built-in `http`/`https` modules only.
+
+---
+
 ## Python SDK
 
 Install in your app:

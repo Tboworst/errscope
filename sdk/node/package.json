@@ -1,0 +1,9 @@
+{
+  "name": "beacon-monitor",
+  "version": "0.1.0",
+  "description": "Error tracking and LLM observability SDK for Beacon",
+  "main": "index.js",
+  "keywords": ["error-tracking", "monitoring", "observability", "llm", "beacon"],
+  "license": "MIT",
+  "engines": { "node": ">=14" }
+}

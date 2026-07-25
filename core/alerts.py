@@ -81,6 +81,68 @@ def check_spike(fingerprint):
         requests.post(URL, json={"text": message})
 
 
+def check_correlated_spike(service, environment):
+    """
+    Fire a single combined alert when error rate AND LLM cost both spike
+    for the same service in the same 5-minute window.
+
+    This is the signal that neither Sentry nor a standalone LLM tool can
+    produce — errors and AI spend moving together points to a specific class
+    of failure where the AI layer is involved in the breakage.
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+
+        current_errors = conn.execute("""
+            SELECT COUNT(*) FROM events
+            WHERE service = ? AND environment = ?
+            AND timestamp >= datetime('now', '-5 minutes')
+        """, (service, environment)).fetchone()[0]
+
+        previous_errors = conn.execute("""
+            SELECT COUNT(*) FROM events
+            WHERE service = ? AND environment = ?
+            AND timestamp >= datetime('now', '-10 minutes')
+            AND timestamp < datetime('now', '-5 minutes')
+        """, (service, environment)).fetchone()[0]
+
+        current_cost = conn.execute("""
+            SELECT COALESCE(SUM(cost_usd), 0.0) FROM llm_events
+            WHERE service = ? AND environment = ?
+            AND timestamp >= datetime('now', '-5 minutes')
+        """, (service, environment)).fetchone()[0]
+
+        previous_cost = conn.execute("""
+            SELECT COALESCE(SUM(cost_usd), 0.0) FROM llm_events
+            WHERE service = ? AND environment = ?
+            AND timestamp >= datetime('now', '-10 minutes')
+            AND timestamp < datetime('now', '-5 minutes')
+        """, (service, environment)).fetchone()[0]
+
+        conn.close()
+    except sqlite3.OperationalError:
+        return
+
+    error_spiking = current_errors >= 3 and (
+        (previous_errors == 0 and current_errors >= 5) or
+        (previous_errors > 0 and current_errors / previous_errors >= 5)
+    )
+
+    cost_spiking = current_cost >= 0.01 and (
+        (previous_cost == 0 and current_cost >= 0.05) or
+        (previous_cost > 0 and current_cost / previous_cost >= 5)
+    )
+
+    if error_spiking and cost_spiking and URL:
+        message = (
+            f"[beacon] correlated spike in {service}/{environment} — "
+            f"{current_errors} errors and ${current_cost:.4f} LLM spend in the last 5 min "
+            f"(vs {previous_errors} errors and ${previous_cost:.4f} before) — "
+            f"errors and AI costs are moving together"
+        )
+        requests.post(URL, json={"text": message})
+
+
 def alert_regression(fingerprint, exc_type, service, environment):
     """
     Fire an alert when a previously-resolved error group is seen again.

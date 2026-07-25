@@ -1,7 +1,7 @@
 import sqlite3
 from .fingerprinting import fingerprint
 from .normalize import normalize_message
-from .alerts import check_and_alert, check_spike, alert_regression
+from .alerts import check_and_alert, check_spike, alert_regression, check_correlated_spike
 
 #connecting the db, must create one if we dont have it yet,creations happen in connect
 conn = sqlite3.connect('beacon.db')
@@ -111,6 +111,10 @@ def store_event(event):
     # spike check: compare the last 5 minutes against the previous 5 minutes
     # fires a separate Slack alert if the rate jumped 5x or more
     check_spike(fp)
+
+    # correlation check: if both error rate and LLM cost spiked for this
+    # service at the same time, fire a single combined alert
+    check_correlated_spike(service, environment)
 
     # drop raw events older than 30 days — groups are kept forever
     local_cur.execute("DELETE FROM events WHERE timestamp < datetime('now', '-30 days')")

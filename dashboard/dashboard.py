@@ -272,6 +272,30 @@ def fmt_relative(ts):
         return ts
 
 
+def fetch_llm_correlation(service, around_ts):
+    """
+    Return LLM activity for a service in a 15-minute window centred on a timestamp.
+    Used by the error detail modal to show whether AI was involved in a spike.
+    Returns (calls, cost_usd, llm_errors).
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        row = conn.execute("""
+            SELECT
+                COUNT(*) as calls,
+                COALESCE(SUM(cost_usd), 0.0) as cost,
+                COALESCE(SUM(is_error), 0) as errors
+            FROM llm_events
+            WHERE service = ?
+            AND timestamp >= datetime(?, '-10 minutes')
+            AND timestamp <= datetime(?, '+5 minutes')
+        """, (service, around_ts, around_ts)).fetchone()
+        conn.close()
+        return row if row else (0, 0.0, 0)
+    except sqlite3.OperationalError:
+        return (0, 0.0, 0)
+
+
 def fetch_recent_deploys(limit=5):
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -328,6 +352,16 @@ class DetailModal(ModalScreen):
             Static(""),
             Label(f"[dim]{fp}[/dim]"),
         ])
+
+        llm_calls, llm_cost, llm_errors = fetch_llm_correlation(service, last_seen)
+        if llm_calls > 0:
+            cost_color = "red" if llm_cost >= 0.10 else "yellow" if llm_cost >= 0.01 else "dim"
+            err_str = f"   [red]{llm_errors} llm errors[/red]" if llm_errors > 0 else ""
+            widgets.extend([
+                Static(""),
+                Label("[dim]ai activity during spike[/dim]"),
+                Label(f"  {llm_calls} calls   [{cost_color}]${llm_cost:.4f}[/{cost_color}]{err_str}"),
+            ])
 
         if github_issue_url:
             widgets.extend([

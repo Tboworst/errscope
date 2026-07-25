@@ -69,6 +69,23 @@ function capture(err) {
  *                         costUsd: 0, feature: 'document-summarizer', error: err });
  *   }
  */
+/**
+ * Mark a deployment in Beacon. Call this from your deploy pipeline or app startup.
+ *
+ *   beacon.notifyDeploy({ version: 'v1.4.2' });
+ */
+function notifyDeploy({ version, service, environment } = {}) {
+  if (!_endpoint) return;
+  const deployEndpoint = _endpoint.replace(/\/ingest.*$/, '') + '/deploy';
+  const payload = {
+    timestamp: _now(),
+    version,
+    service: service || _service,
+    environment: environment || _environment,
+  };
+  setImmediate(() => _postTo(deployEndpoint, payload));
+}
+
 function captureLlm({ model, promptHash, inputTokens = 0, outputTokens = 0, latencyMs = 0, costUsd = 0, feature = null, error = null } = {}) {
   if (!_endpoint) return;
   const llmEndpoint = _endpoint.replace(/\/+$/, '') + '/llm';
@@ -148,4 +165,4 @@ function _postTo(url, payload) {
   }
 }
 
-module.exports = { init, capture, captureLlm };
+module.exports = { init, capture, captureLlm, notifyDeploy };

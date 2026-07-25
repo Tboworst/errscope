@@ -76,6 +76,21 @@ def _post_llm(payload, endpoint):
         pass
 
 
+def notify_deploy(version, service=None, environment=None):
+    """Call this in your deploy pipeline to mark a release in Beacon."""
+    if not _endpoint:
+        return
+    endpoint = _endpoint.rstrip("/").replace("/ingest", "") + "/deploy"
+    payload = {
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "version": version,
+        "service": service or _service,
+        "environment": environment or _environment,
+    }
+    thread = threading.Thread(target=_post_llm, args=(payload, endpoint), daemon=True)
+    thread.start()
+
+
 def capture_llm(model, prompt_hash, input_tokens, output_tokens, latency_ms, cost_usd, feature=None, error=None):
     """Capture a single LLM call (success or failure) and send it to Beacon."""
     if not _endpoint:

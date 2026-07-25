@@ -49,6 +49,15 @@ def _migrate_db():
                 first_seen TEXT, last_seen TEXT
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS deploys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                service TEXT,
+                environment TEXT,
+                version TEXT,
+                timestamp TEXT
+            )
+        """)
         conn.commit()
         conn.close()
     except sqlite3.OperationalError:
@@ -245,6 +254,39 @@ def fmt_ts(ts):
         return ts
 
 
+def fmt_relative(ts):
+    if not ts:
+        return ""
+    try:
+        dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ")
+        minutes = int((datetime.utcnow() - dt).total_seconds() / 60)
+        if minutes < 1:
+            return "just now"
+        if minutes < 60:
+            return f"{minutes}m ago"
+        hours = minutes // 60
+        if hours < 24:
+            return f"{hours}h ago"
+        return f"{hours // 24}d ago"
+    except Exception:
+        return ts
+
+
+def fetch_recent_deploys(limit=5):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute("""
+            SELECT service, environment, version, timestamp
+            FROM deploys
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
+        conn.close()
+        return rows
+    except sqlite3.OperationalError:
+        return []
+
+
 # ── Detail modal ──────────────────────────────────────────────────────────────
 
 class DetailModal(ModalScreen):
@@ -355,6 +397,11 @@ class BeaconApp(App):
         margin-bottom: 0;
     }
 
+    #deploy-list {
+        margin-top: 2;
+        height: auto;
+    }
+
     Sparkline {
         height: 8;
     }
@@ -429,6 +476,7 @@ class BeaconApp(App):
                 yield Static(id="stats")
                 yield Label("events / min  (last 20m)", id="sparkline-label")
                 yield Sparkline([], id="sparkline", summary_function=max)
+                yield Static(id="deploy-list")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -534,6 +582,8 @@ class BeaconApp(App):
         spark = self.query_one("#sparkline", Sparkline)
         spark.data = sparkline_data if sparkline_data else [0.0]
 
+        self._update_deploy_list()
+
     def _render_llm_table(self) -> None:
         table = self.query_one("#groups-table", DataTable)
         table.clear()
@@ -598,6 +648,26 @@ class BeaconApp(App):
         )
         self.query_one("#stats", Static).update(stats_text)
         self.query_one("#sparkline", Sparkline).data = [0.0]
+        self._update_deploy_list()
+
+    def _update_deploy_list(self) -> None:
+        deploys = fetch_recent_deploys()
+        if not deploys:
+            self.query_one("#deploy-list", Static).update("")
+            return
+
+        lines = ["[dim]recent deploys[/dim]"]
+        for service, environment, version, timestamp in deploys:
+            age = fmt_relative(timestamp)
+            # highlight very recent deploys — they may have caused the errors
+            env_color = "red" if environment == "production" else "yellow"
+            lines.append(
+                f"[{env_color}]{version}[/{env_color}]  "
+                f"[dim]{service}[/dim]  "
+                f"[dim]{age}[/dim]"
+            )
+
+        self.query_one("#deploy-list", Static).update("\n".join(lines))
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if self._llm_view:

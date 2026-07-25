@@ -2,6 +2,7 @@ import os
 from flask import Flask, request, jsonify
 from .storage import store_event
 from .llm_storage import store_llm_call
+from .deploy_storage import store_deploy
 
 
 app = Flask(__name__)
@@ -45,6 +46,25 @@ def handle_ingest_llm():
 
     try:
         store_llm_call(data)
+        return jsonify({"status": "ok"}), 200
+    except KeyError as e:
+        return jsonify({"error": f"missing field: {e}"}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/deploy', methods=['POST'])
+def handle_deploy():
+    if API_KEY and request.headers.get("X-Api-Key") != API_KEY:
+        return jsonify({"error": "unauthorized"}), 401
+
+    data = request.get_json()
+
+    if not data:
+        return jsonify({"error": "no JSON body"}), 400
+
+    try:
+        store_deploy(data)
         return jsonify({"status": "ok"}), 200
     except KeyError as e:
         return jsonify({"error": f"missing field: {e}"}), 400

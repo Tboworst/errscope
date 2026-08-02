@@ -139,16 +139,18 @@ def _ts(delta_minutes=0):
 
 def _insert_group(db_path, fp, exc="TypeError", msg="Something broke",
                   chain="a->b->c", count=5, service="svc", env="production",
-                  status="active", first_seen=None, last_seen=None):
+                  status="active", first_seen=None, last_seen=None,
+                  resolved_at=None):
     conn = sqlite3.connect(db_path)
     conn.execute(
         """INSERT OR REPLACE INTO groups
            (fingerprint, exception_type, normalize_message, function_chain, count,
             first_seen, last_seen, service, environment, status, resolved_at,
             github_issue_url, github_issue_number)
-           VALUES (?,?,?,?,?,?,?,?,?,?,NULL,NULL,NULL)""",
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,NULL,NULL)""",
         (fp, exc, msg, chain, count,
-         first_seen or _ts(-60), last_seen or _ts(), service, env, status)
+         first_seen or _ts(-60), last_seen or _ts(), service, env, status,
+         resolved_at)
     )
     conn.commit()
     conn.close()
@@ -460,6 +462,15 @@ class TestOverview:
         data = r.get_json()
         assert data["regressed_count"] == 1
 
+    def test_resolved_30d_excludes_regressed(self, client, db_path):
+        # A regressed group re-fired: it is NOT "resolved in the last 30 days",
+        # even if a stale resolved_at is still present on the row.
+        _insert_group(db_path, "fp1", status="resolved", resolved_at=_ts(-60))
+        _insert_group(db_path, "fp2", status="regressed", resolved_at=_ts(-60))
+        r = client.get("/api/overview")
+        data = r.get_json()
+        assert data["resolved_30d"] == 1
+
 
 # ---------------------------------------------------------------------------
 # Tests: GET /api/llm
@@ -557,6 +568,27 @@ class TestDeploys:
         assert d["suspect"] is True
         assert d["suspect_fp"] == "fp1"
 
+    def test_suspect_fp_bounded_by_next_deploy(self, client, db_path):
+        # Deploy A at -120min, deploy B (same service+env) at -30min.
+        # fpA fires 25x in A's window; fpB fires 30x after B.
+        # A's suspect_fp must be fpA — without the next-deploy bound the
+        # unbounded top-fingerprint query would attribute fpB (30 > 25) to A.
+        _insert_deploy(db_path, service="svc", env="production",
+                       version="v1.0", ts=_ts(-120))
+        _insert_deploy(db_path, service="svc", env="production",
+                       version="v1.1", ts=_ts(-30))
+        for _ in range(25):
+            _insert_event(db_path, "fpA", service="svc", env="production", ts=_ts(-90))
+        for _ in range(30):
+            _insert_event(db_path, "fpB", service="svc", env="production", ts=_ts(-10))
+        r = client.get("/api/deploys")
+        deploys = {d["version"]: d for d in r.get_json()["deploys"]}
+        assert deploys["v1.0"]["errors_after"] == 25
+        assert deploys["v1.0"]["suspect"] is True
+        assert deploys["v1.0"]["suspect_fp"] == "fpA"
+        assert deploys["v1.1"]["errors_after"] == 30
+        assert deploys["v1.1"]["suspect_fp"] == "fpB"
+
     def test_env_filter(self, client, db_path):
         _insert_deploy(db_path, service="svc", env="production")
         _insert_deploy(db_path, service="svc", env="staging")
@@ -613,6 +645,26 @@ class TestAlerts:
         alerts = r.get_json()["alerts"]
         deploy_alerts = [a for a in alerts if a["sev"] == "deploy"]
         assert len(deploy_alerts) >= 1
+
+    def test_deploy_alert_errors_bounded_by_next_deploy(self, client, db_path):
+        # Same scenario as the deploys endpoint bound test: deploy A's alert
+        # must report only errors that occurred before the next deploy B.
+        _insert_deploy(db_path, service="svc", env="production",
+                       version="v1.0", ts=_ts(-120))
+        _insert_deploy(db_path, service="svc", env="production",
+                       version="v1.1", ts=_ts(-30))
+        for _ in range(25):
+            _insert_event(db_path, "fpA", service="svc", env="production", ts=_ts(-90))
+        for _ in range(30):
+            _insert_event(db_path, "fpB", service="svc", env="production", ts=_ts(-10))
+        r = client.get("/api/alerts")
+        deploy_alerts = [a for a in r.get_json()["alerts"] if a["sev"] == "deploy"]
+        assert len(deploy_alerts) == 2
+        by_title = {a["title"]: a for a in deploy_alerts}
+        a_alert = by_title["Suspect deploy v1.0 in svc"]
+        b_alert = by_title["Suspect deploy v1.1 in svc"]
+        assert "25 errors" in a_alert["detail"]  # not 55 (25 + 30)
+        assert "30 errors" in b_alert["detail"]
 
     def test_llm_error_rate_alert(self, client, db_path):
         # 1 call, 1 error = 100% error rate → > 10% threshold
@@ -709,10 +761,27 @@ class TestMeta:
 # ---------------------------------------------------------------------------
 
 class TestCors:
-    def test_cors_headers_present(self, client, db_path):
+    def test_cors_headers_present_for_allowed_origin(self, client, db_path):
         r = client.get("/api/meta", headers={"Origin": "http://localhost:5173"})
-        assert "Access-Control-Allow-Origin" in r.headers
+        assert r.headers.get("Access-Control-Allow-Origin") == "http://localhost:5173"
+        assert "Access-Control-Allow-Methods" in r.headers
+
+    def test_no_cors_headers_without_origin(self, client, db_path):
+        # Same-origin / curl / server-to-server requests carry no Origin header
+        # and must NOT receive Access-Control-Allow-Origin (especially not "*").
+        r = client.get("/api/meta")
+        assert "Access-Control-Allow-Origin" not in r.headers
+
+    def test_no_cors_headers_for_disallowed_origin(self, client, db_path):
+        r = client.get("/api/meta", headers={"Origin": "https://evil.example.com"})
+        assert "Access-Control-Allow-Origin" not in r.headers
 
     def test_options_preflight(self, client, db_path):
+        r = client.options("/api/meta", headers={"Origin": "http://localhost:5173"})
+        assert r.status_code == 204
+        assert r.headers.get("Access-Control-Allow-Origin") == "http://localhost:5173"
+
+    def test_options_preflight_without_origin(self, client, db_path):
         r = client.options("/api/meta")
         assert r.status_code == 204
+        assert "Access-Control-Allow-Origin" not in r.headers

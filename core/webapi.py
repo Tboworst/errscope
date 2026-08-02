@@ -46,11 +46,14 @@ _CORS_ORIGINS = {"http://localhost:5173"}
 
 
 def _add_cors(response):
+    # Only emit CORS headers for allowlisted cross-origin callers (the Vite dev
+    # server). Same-origin requests carry no Origin header and need no CORS
+    # headers; unknown origins get none, so the browser blocks them.
     origin = request.headers.get("Origin", "")
-    if origin in _CORS_ORIGINS or origin == "":
-        response.headers["Access-Control-Allow-Origin"] = origin or "*"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    if origin in _CORS_ORIGINS:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
     return response
 
 
@@ -365,7 +368,7 @@ def get_overview():
 
     resolved_30d = conn.execute(
         f"""SELECT COUNT(*) FROM groups
-            WHERE status IN ('resolved', 'regressed')
+            WHERE status = 'resolved'
               AND resolved_at >= datetime('now', '-30 days')
               {env_filter}""",
         env_params,
@@ -650,15 +653,25 @@ def get_deploys():
             > 0
         )
 
-        # top error group fingerprint for suspect
+        # top error group fingerprint for suspect — bounded to this deploy's
+        # window (until the next deploy of the same service+env, if any)
         suspect_fp = None
         if suspect:
-            top = conn.execute(
-                """SELECT fingerprint, COUNT(*) as cnt FROM events
-                   WHERE service = ? AND environment = ? AND timestamp >= ?
-                   GROUP BY fingerprint ORDER BY cnt DESC LIMIT 1""",
-                (service, environment, deploy_ts),
-            ).fetchone()
+            if next_ts:
+                top = conn.execute(
+                    """SELECT fingerprint, COUNT(*) as cnt FROM events
+                       WHERE service = ? AND environment = ?
+                         AND timestamp >= ? AND timestamp < ?
+                       GROUP BY fingerprint ORDER BY cnt DESC LIMIT 1""",
+                    (service, environment, deploy_ts, next_ts),
+                ).fetchone()
+            else:
+                top = conn.execute(
+                    """SELECT fingerprint, COUNT(*) as cnt FROM events
+                       WHERE service = ? AND environment = ? AND timestamp >= ?
+                       GROUP BY fingerprint ORDER BY cnt DESC LIMIT 1""",
+                    (service, environment, deploy_ts),
+                ).fetchone()
             if top:
                 suspect_fp = top["fingerprint"]
 
@@ -812,18 +825,44 @@ def get_alerts():
         env_params,
     ).fetchall()
     for d in deploy_rows:
-        errors_after = conn.execute(
-            """SELECT COUNT(*) FROM events
-               WHERE service = ? AND environment = ? AND timestamp >= ?""",
+        # bound this deploy's window at the next deploy of the same service+env
+        next_row = conn.execute(
+            """SELECT timestamp FROM deploys
+               WHERE service = ? AND environment = ? AND timestamp > ?
+               ORDER BY timestamp ASC LIMIT 1""",
             (d["service"], d["environment"], d["timestamp"]),
-        ).fetchone()[0]
-        if errors_after >= 20:
-            top = conn.execute(
-                """SELECT fingerprint, COUNT(*) as cnt FROM events
-                   WHERE service = ? AND environment = ? AND timestamp >= ?
-                   GROUP BY fingerprint ORDER BY cnt DESC LIMIT 1""",
+        ).fetchone()
+        next_ts = next_row["timestamp"] if next_row else None
+
+        if next_ts:
+            errors_after = conn.execute(
+                """SELECT COUNT(*) FROM events
+                   WHERE service = ? AND environment = ?
+                     AND timestamp >= ? AND timestamp < ?""",
+                (d["service"], d["environment"], d["timestamp"], next_ts),
+            ).fetchone()[0]
+        else:
+            errors_after = conn.execute(
+                """SELECT COUNT(*) FROM events
+                   WHERE service = ? AND environment = ? AND timestamp >= ?""",
                 (d["service"], d["environment"], d["timestamp"]),
-            ).fetchone()
+            ).fetchone()[0]
+        if errors_after >= 20:
+            if next_ts:
+                top = conn.execute(
+                    """SELECT fingerprint, COUNT(*) as cnt FROM events
+                       WHERE service = ? AND environment = ?
+                         AND timestamp >= ? AND timestamp < ?
+                       GROUP BY fingerprint ORDER BY cnt DESC LIMIT 1""",
+                    (d["service"], d["environment"], d["timestamp"], next_ts),
+                ).fetchone()
+            else:
+                top = conn.execute(
+                    """SELECT fingerprint, COUNT(*) as cnt FROM events
+                       WHERE service = ? AND environment = ? AND timestamp >= ?
+                       GROUP BY fingerprint ORDER BY cnt DESC LIMIT 1""",
+                    (d["service"], d["environment"], d["timestamp"]),
+                ).fetchone()
             suspect_fp = top["fingerprint"] if top else None
             alerts.append({
                 "id": f"deploy:{d['id']}",

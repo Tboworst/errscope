@@ -55,5 +55,13 @@ export async function reopenIssue(fp) {
 }
 
 export async function createGithubIssue(fp) {
-  return request(`/api/issues/${fp}/github`, { method: 'POST' });
+  // The contract returns 400 {"ok": false, "error": "github_not_configured"}
+  // when GitHub isn't set up — an expected response the UI turns into a
+  // setup hint, not a network failure, so surface the body instead of throwing.
+  const res = await fetch(`/api/issues/${fp}/github`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+  });
+  if (res.status === 400) return res.json();
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
 }

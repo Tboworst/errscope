@@ -18,7 +18,7 @@ import IssueSheet from './components/IssueSheet.jsx';
 import RowMenu from './components/RowMenu.jsx';
 import Toast from './components/Toast.jsx';
 
-const POLL_INTERVAL = 10000;
+const POLL_INTERVAL = 2000;
 
 export default function App() {
   // Page / UI state

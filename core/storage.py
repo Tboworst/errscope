@@ -85,7 +85,9 @@ def store_event(event):
 
     # Upsert group — if it was resolved, mark it as regressed and clear resolved_at
     local_cur.execute("""
-        INSERT INTO groups VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL)
+        INSERT INTO groups (fingerprint, exception_type, normalize_message, function_chain,
+                            count, first_seen, last_seen, service, environment, status, resolved_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL)
         ON CONFLICT(fingerprint) DO UPDATE SET
             count = count + 1,
             last_seen = ?,

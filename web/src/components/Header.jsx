@@ -1,11 +1,11 @@
 import React from 'react';
-import { ACCENT } from '../styles.js';
-import { sevDot } from '../styles.js';
+import { ACCENT, RED, AMBER, sevDot } from '../styles.js';
+import { relativeTime } from '../format.js';
 
 export default function Header({
   page, q, onSearch, envFilter, onEnvFilter,
   showResolved, onToggleResolved,
-  alerts,
+  alerts, issues,
   onNavigate,
 }) {
   const [searchFocus, setSearchFocus] = React.useState(false);
@@ -59,7 +59,7 @@ export default function Header({
             }}
           />
           {searchOpen && (
-            <SearchDropdown q={q} onNavigate={onNavigate} />
+            <SearchDropdown q={q} issues={issues} onNavigate={onNavigate} />
           )}
         </div>
 
@@ -154,7 +154,7 @@ export default function Header({
                     <div style={{ fontSize: 12.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.title}</div>
                     <div style={{ fontSize: 11.5, color: 'var(--fg3,#71717a)', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.detail}</div>
                   </div>
-                  <span style={{ fontSize: 11, color: 'var(--fg4,#52525b)', whiteSpace: 'nowrap' }}>{a._relTime}</span>
+                  <span style={{ fontSize: 11, color: 'var(--fg4,#52525b)', whiteSpace: 'nowrap' }}>{a.ts ? relativeTime(a.ts) : ''}</span>
                 </div>
               ))}
               <div
@@ -173,17 +173,12 @@ export default function Header({
   );
 }
 
-// Search dropdown — gets issues from parent via window/global fetch would be complex,
-// so App passes a prop. We accept issues as prop from App through a context-like approach.
-// Simpler: expose a prop on Header for issues list.
-function SearchDropdown({ q, onNavigate }) {
-  // This component relies on issues being passed via context from App
-  // We'll use a global ref set by App
-  const issues = window.__beaconIssues || [];
+// Search dropdown — filters the full issues list client-side (exc/msg/service,
+// case-insensitive), mirroring the design's visibleGroups() logic.
+function SearchDropdown({ q, issues, onNavigate }) {
   const ql = q.toLowerCase();
-  const RED = '#ef4444', AMBER = '#f59e0b', ACCENT = '#6366f1';
 
-  const results = issues
+  const results = (issues || [])
     .filter(g => g.exc.toLowerCase().includes(ql) || g.msg.toLowerCase().includes(ql) || g.service.includes(ql))
     .slice(0, 6)
     .map(g => ({

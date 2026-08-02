@@ -8,7 +8,7 @@ const NAV_DEFS = [
   { id: 'deploys', label: 'Deploys', icon: '⇪' },
 ];
 
-export default function Sidebar({ page, collapsed, onNavigate, onToggle, meta, envFilter, onEnvFilter }) {
+export default function Sidebar({ page, collapsed, onNavigate, onToggle, meta, envFilter, onEnvFilter, activeIssueCount, alertCount }) {
   const open = !collapsed;
   const sideWidth = open ? '232px' : '64px';
   const sidePad = open ? '16px 12px' : '16px 9px';
@@ -43,8 +43,13 @@ export default function Sidebar({ page, collapsed, onNavigate, onToggle, meta, e
     };
   });
 
-  // Badge counts for nav items — just show alert badge=5 as design; issues badge computed in App
-  const badges = { issues: null, llm: '', alerts: '5', deploys: '' };
+  // Badge counts for nav items — derived from live data (empty string hides the badge)
+  const badges = {
+    issues: activeIssueCount > 0 ? String(activeIssueCount) : '',
+    llm: '',
+    alerts: alertCount > 0 ? String(alertCount) : '',
+    deploys: '',
+  };
 
   return (
     <div style={{

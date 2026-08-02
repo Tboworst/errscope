@@ -83,6 +83,20 @@ export default function IssueSheet({ issue, onClose, onResolve, onReopen, onGith
             >
               {resolveLabel}
             </div>
+            {resolved && (
+              <div
+                onClick={onReopen}
+                style={{
+                  border: '1px solid var(--border2,#27272a)', color: 'var(--fg1,#d4d4d8)',
+                  fontWeight: 500, fontSize: 13, borderRadius: 8,
+                  padding: '7px 14px', cursor: 'pointer', whiteSpace: 'nowrap',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.background = 'var(--hover,#18181b)'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = ''; }}
+              >
+                Reopen
+              </div>
+            )}
             <div
               onClick={onGithub}
               style={{

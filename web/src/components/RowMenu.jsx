@@ -1,12 +1,7 @@
 import React from 'react';
 
-export default function RowMenu({ items, pos, onClose }) {
-  React.useEffect(() => {
-    const handler = () => onClose();
-    document.addEventListener('click', handler);
-    return () => document.removeEventListener('click', handler);
-  }, [onClose]);
-
+// Click-away and Esc handling are owned by the parent (App.jsx).
+export default function RowMenu({ items, pos }) {
   const x = Math.max(8, pos.x - 214) + 'px';
   const y = (pos.y + 8) + 'px';
 

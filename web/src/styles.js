@@ -1,4 +1,5 @@
-export { ACCENT } from './theme.js';
+import { ACCENT } from './theme.js';
+export { ACCENT };
 
 export const RED = '#ef4444';
 export const AMBER = '#f59e0b';
@@ -6,9 +7,10 @@ export const GREEN = '#22c55e';
 export const MUTED = 'var(--fg3,#71717a)';
 
 export function envStyle(env) {
-  return env === 'production'
-    ? { envColor: '#fca5a5', envBg: 'rgba(239,68,68,0.12)' }
-    : { envColor: '#fcd34d', envBg: 'rgba(245,158,11,0.12)' };
+  if (env === 'production') return { envColor: '#fca5a5', envBg: 'rgba(239,68,68,0.12)' };
+  if (env === 'staging') return { envColor: '#fcd34d', envBg: 'rgba(245,158,11,0.12)' };
+  // Neutral pill for any other env (matches the design's neutral tag style)
+  return { envColor: 'var(--fg2,#a1a1aa)', envBg: 'var(--border2,#27272a)' };
 }
 
 // Build sparkline bar data from a raw array

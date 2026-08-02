@@ -117,7 +117,7 @@ function buildCards(page, overview, llm, deploys, alerts) {
     },
     {
       label: 'Events / min',
-      value: String(ov.events_per_min || lastVal),
+      value: String(ov.events_per_min ?? lastVal),
       sub: `peak ${max} · last 20m`,
       spark: evSpark.map(v => ({ h: Math.round(100 * v / max), color: v === max ? RED : ACCENT })),
     },

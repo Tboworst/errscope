@@ -84,23 +84,14 @@ export default function App() {
     });
   }, [sheetFp]);
 
-  // Initial load + polling
+  // Initial load + polling. loadAll's identity changes with envFilter/q
+  // (useCallback deps), so this effect also re-runs on filter changes.
   useEffect(() => {
     applyTheme('zinc');
     loadAll();
     const interval = setInterval(loadAll, POLL_INTERVAL);
     return () => clearInterval(interval);
   }, [loadAll]);
-
-  // Re-load when env filter or q changes
-  useEffect(() => {
-    loadAll();
-  }, [envFilter, q]);
-
-  // Expose issues for search dropdown (via global ref)
-  useEffect(() => {
-    window.__beaconIssues = issues;
-  }, [issues]);
 
   // Keyboard handlers
   useEffect(() => {
@@ -122,10 +113,7 @@ export default function App() {
 
   // Cleanup
   useEffect(() => {
-    return () => {
-      clearTimeout(toastTimerRef.current);
-      delete window.__beaconIssues;
-    };
+    return () => clearTimeout(toastTimerRef.current);
   }, []);
 
   // Navigation helper (also handles opening sheet from search/alerts)
@@ -135,10 +123,18 @@ export default function App() {
     setMenuFp(null);
   }, []);
 
-  // Visible issues (client-side filter for resolved toggle)
+  // Visible issues — client-side resolved toggle plus a local q filter
+  // (mirrors the design's visibleGroups(); works even if the backend
+  // ignores the q param on /api/issues)
+  const ql = q.toLowerCase();
   const visibleIssues = issues.filter(g =>
-    (showResolved || g.status !== 'resolved')
+    (showResolved || g.status !== 'resolved') &&
+    (!ql || g.exc.toLowerCase().includes(ql) || g.msg.toLowerCase().includes(ql) || g.service.includes(ql))
   );
+
+  // Live badge counts for the sidebar
+  const activeIssueCount = issues.filter(g => g.status !== 'resolved').length;
+  const alertCount = (alertsData?.alerts || []).length;
 
   // Row menu items
   const menuIssue = issues.find(x => x.fp === menuFp);
@@ -182,8 +178,7 @@ export default function App() {
     if (sheetFp === fp) setSheetFp(null);
     try {
       const res = await resolveIssue(fp);
-      const github = issues.find(x => x.fp === fp)?.github;
-      notify(res.github_closed ? `Resolved and closed GitHub issue.` : "Resolved. You'll be alerted immediately if it comes back.");
+      notify(res.github_closed ? 'Resolved and closed GitHub issue.' : "Resolved. You'll be alerted immediately if it comes back.");
     } catch {
       notify("Can't reach Beacon server");
       loadAll(); // revert
@@ -192,6 +187,7 @@ export default function App() {
 
   async function handleReopen(fp) {
     setIssues(prev => prev.map(x => x.fp === fp ? { ...x, status: 'active' } : x));
+    setSheetIssue(prev => prev && prev.fp === fp ? { ...prev, status: 'active' } : prev);
     try {
       await reopenIssue(fp);
       notify('Issue reopened — back in the active list.');
@@ -240,6 +236,8 @@ export default function App() {
         meta={meta}
         envFilter={envFilter}
         onEnvFilter={setEnvFilter}
+        activeIssueCount={activeIssueCount}
+        alertCount={alertCount}
       />
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
@@ -252,6 +250,7 @@ export default function App() {
           showResolved={showResolved}
           onToggleResolved={() => setShowResolved(v => !v)}
           alerts={alertsData?.alerts}
+          issues={issues}
           onNavigate={handleNavigate}
         />
 
@@ -303,13 +302,9 @@ export default function App() {
         />
       )}
 
-      {/* Row context menu */}
+      {/* Row context menu (click-away/Esc handled by App's document listeners) */}
       {menuFp && menuIssue && (
-        <RowMenu
-          items={rowMenuItems}
-          pos={menuPos}
-          onClose={() => setMenuFp(null)}
-        />
+        <RowMenu items={rowMenuItems} pos={menuPos} />
       )}
 
       <Toast message={toast} />

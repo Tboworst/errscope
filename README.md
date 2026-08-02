@@ -57,7 +57,7 @@ python3 start_dashboard.py   # terminal 2
 
 Beacon also ships a browser dashboard — same data as the TUI, served straight from the ingest server. Issues, LLM calls, alerts and deploys, with search, environment filters, resolve / reopen, and GitHub issue creation.
 
-Build it once, then the server does the rest:
+Build it once, then the server does the rest (requires Node.js 18+; Docker users skip this — the image builds it automatically):
 
 ```bash
 cd web

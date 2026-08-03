@@ -13,3 +13,7 @@ __pycache__/
 # test artifacts
 test_event.json
 test.py
+
+# frontend
+web/node_modules/
+web/dist/

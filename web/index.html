@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Beacon</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    html, body { margin: 0; padding: 0; background: var(--bg, #09090b); }
+    * { box-sizing: border-box; }
+    a { color: var(--fg2, #a1a1aa); text-decoration: none; }
+    a:hover { color: var(--fg, #fafafa); text-decoration: underline; }
+    ::selection { background: var(--fg5, #3f3f46); color: var(--fg, #fafafa); }
+    input::placeholder { color: var(--fg4, #52525b); }
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-thumb { background: var(--border2, #27272a); border-radius: 5px; border: 2px solid var(--bg, #09090b); }
+    @keyframes pingDot { 0% { transform: scale(1); opacity: .8; } 80%, 100% { transform: scale(2.4); opacity: 0; } }
+    @keyframes sheetIn { from { transform: translateX(24px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    @keyframes toastIn { from { transform: translateY(8px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.jsx"></script>
+</body>
+</html>

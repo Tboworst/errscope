@@ -1,0 +1,9 @@
+.git
+.superpowers
+beacon.db
+web/node_modules
+web/dist
+node_modules
+__pycache__
+*.pyc
+.env

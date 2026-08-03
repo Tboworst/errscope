@@ -53,6 +53,37 @@ python3 start_dashboard.py   # terminal 2
 
 ---
 
+## Web dashboard
+
+Beacon also ships a browser dashboard — same data as the TUI, served straight from the ingest server. Issues, LLM calls, alerts and deploys, with search, environment filters, resolve / reopen, and GitHub issue creation.
+
+Build it once, then the server does the rest (requires Node.js 18+; Docker users skip this — the image builds it automatically):
+
+```bash
+cd web
+npm install
+npm run build
+```
+
+Start the server as usual and open `http://localhost:7000`:
+
+```bash
+python3 start_server.py
+```
+
+For frontend development, run the Vite dev server alongside — it proxies `/api` to the ingest server and hot-reloads:
+
+```bash
+python3 start_server.py      # terminal 1
+cd web && npm run dev        # terminal 2 → http://localhost:5173
+```
+
+The TUI keeps working unchanged — both dashboards read the same `beacon.db`.
+
+> macOS note: AirPlay Receiver also listens on port 7000. If `http://localhost:7000` misbehaves, use `http://127.0.0.1:7000`.
+
+---
+
 ## Node.js SDK
 
 Copy `sdk/node/` into your project (or `npm install beacon-monitor` once published):
@@ -168,6 +199,7 @@ Line numbers are ignored — they change on every reformat. Function names are s
 beacon/
 ├── core/               ← ingest server, storage, fingerprinting (Python → Go)
 ├── dashboard/          ← live TUI dashboard (Textual)
+├── web/                ← web dashboard (Vite + React, served by the ingest server)
 ├── sdk/
 │   └── python/         ← Python SDK
 ├── start_server.py     ← python3 start_server.py

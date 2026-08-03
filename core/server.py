@@ -3,9 +3,12 @@ from flask import Flask, request, jsonify
 from .storage import store_event
 from .llm_storage import store_llm_call
 from .deploy_storage import store_deploy
+from .webapi import webapi, register_static_serving
 
 
 app = Flask(__name__)
+app.register_blueprint(webapi)
+register_static_serving(app)
 
 # if BEACON_API_KEY is set, all ingest requests must include it
 # if not set, the server accepts all requests (local dev mode)

@@ -984,3 +984,77 @@ def get_meta():
         "github_configured": gh_module.github_configured(),
         "slack_connected": bool(os.environ.get("SLACK_WEBHOOK_URL")),
     })
+
+
+# ---------------------------------------------------------------------------
+# GET /api/health  — used by Railway/Render as the health check endpoint
+# ---------------------------------------------------------------------------
+
+@webapi.route("/api/health")
+def get_health():
+    try:
+        conn = _db()
+        event_count = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+        conn.close()
+        db_ok = True
+    except Exception:
+        event_count = 0
+        db_ok = False
+
+    db_bytes = 0
+    try:
+        db_bytes = os.path.getsize(DB_PATH)
+    except OSError:
+        pass
+
+    status = 200 if db_ok else 503
+    return jsonify({
+        "ok": db_ok,
+        "db_bytes": db_bytes,
+        "event_count": event_count,
+        "retention_days": 30,
+        "api_key_set": bool(os.environ.get("BEACON_API_KEY")),
+        "slack_connected": bool(os.environ.get("SLACK_WEBHOOK_URL")),
+        "github_configured": gh_module.github_configured(),
+    }), status
+
+
+# ---------------------------------------------------------------------------
+# GET /api/issues/<fp>/events  — paginated raw events for one error group
+# ---------------------------------------------------------------------------
+
+@webapi.route("/api/issues/<fp>/events")
+def get_issue_events(fp):
+    limit  = min(int(request.args.get("limit", 50)), 200)
+    offset = int(request.args.get("offset", 0))
+
+    conn = _db()
+
+    exists = conn.execute(
+        "SELECT 1 FROM groups WHERE fingerprint = ?", (fp,)
+    ).fetchone()
+    if not exists:
+        conn.close()
+        return jsonify({"error": "not found"}), 404
+
+    rows = conn.execute(
+        """SELECT timestamp, exception_type, message, service, environment
+           FROM events
+           WHERE fingerprint = ?
+           ORDER BY timestamp DESC
+           LIMIT ? OFFSET ?""",
+        (fp, limit, offset),
+    ).fetchall()
+
+    total = conn.execute(
+        "SELECT COUNT(*) FROM events WHERE fingerprint = ?", (fp,)
+    ).fetchone()[0]
+
+    conn.close()
+
+    return jsonify({
+        "events": [dict(r) for r in rows],
+        "total":  total,
+        "limit":  limit,
+        "offset": offset,
+    })

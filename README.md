@@ -10,17 +10,7 @@ Think lightweight Sentry, built for the terminal, owned by you.
 
 ## What it looks like
 
-```
-
-
-  <video src="https://github.com/user-attachments/assets/e667f648-acb5-4ad9-83b8-c0b72a2af523" controls width="100%"></video>
-
-
-
-
-```
-
-Press **enter** on any row to drill into the full stack trace, call chain, and timestamps.
+<video src="https://github.com/user-attachments/assets/e667f648-acb5-4ad9-83b8-c0b72a2af523" controls width="100%"></video>
 
 ---
 
